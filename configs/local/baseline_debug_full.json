@@ -1,0 +1,14 @@
+{
+  "extends": "baseline_debug_6500.json",
+  "kind": "baseline",
+  "description": "Full 30k clean OMeGa baseline with local debug previews and all existing OMeGa losses enabled.",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_baseline_debug_full",
+    "max_steps": 30000,
+    "save_steps": [30000],
+    "eval_steps": [7000, 30000],
+    "refine_stop_iter": 15000,
+    "mesh_preview_contact_sheet_images": 32
+  }
+}
+

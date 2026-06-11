@@ -1,0 +1,30 @@
+{
+  "extends": "depth_regularized_6500.json",
+  "kind": "extension",
+  "description": "6500-step OMeGa-4-Building run with rendered-depth and dynamic coplane regularization.",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_geometry_regularized_6500",
+    "building_coplane_regularization_on": true,
+    "building_coplane_start_iter": 3000,
+    "building_coplane_refresh_every": 500,
+    "building_coplane_point_lambda": 0.05,
+    "building_coplane_normal_lambda": 0.005,
+    "building_coplane_huber_m": 0.02,
+    "building_coplane_normal_angle_deg": 8.0,
+    "building_coplane_plane_distance_m": 0.03,
+    "building_coplane_min_faces": 24,
+    "building_coplane_min_group_area_m2": 0.01,
+    "building_coplane_min_face_area_m2": 1e-07,
+    "building_coplane_max_groups": 4096,
+    "building_coplane_depth_assist_on": true,
+    "building_coplane_depth_planar_threshold": 0.65,
+    "building_coplane_depth_sample_stride": 8,
+    "building_coplane_depth_tile_size_px": 96,
+    "building_coplane_depth_min_tile_points": 64,
+    "building_coplane_depth_tile_fit_max_error_m": 0.04,
+    "building_coplane_depth_plane_distance_m": 0.08,
+    "building_coplane_depth_normal_angle_deg": 15.0,
+    "building_coplane_depth_min_plane_points": 600,
+    "building_coplane_depth_max_planes": 32
+  }
+}

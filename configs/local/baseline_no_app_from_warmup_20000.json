@@ -1,0 +1,10 @@
+{
+  "kind": "baseline",
+  "description": "20000-step OMeGa baseline resumed from the no-app-opt warmup. This keeps standard SH splat colors instead of the optional appearance embedding path, which makes static splat PLY export more faithful.",
+  "extends": "baseline_from_warmup_20000.json",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_baseline_no_app_from_warmup_20000",
+    "resume_from_checkpoint": "${PACKAGE_ROOT}/omega/model_warmup_no_app_2999/ckpts/ckpt_2999_rank0.pt",
+    "app_opt": false
+  }
+}

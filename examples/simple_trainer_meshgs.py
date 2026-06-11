@@ -3,6 +3,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Literal
 import imageio
 import open3d as o3d
@@ -16,7 +17,14 @@ import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-from datasets.colmap import Dataset, Parser
+from datasets.colmap import (
+    Dataset,
+    Parser,
+    _crop_guide_maps,
+    _load_building_depth_guide_npz,
+    _remap_guide_maps,
+    _resize_guide_maps,
+)
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -42,6 +50,44 @@ from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 
 import cv2
 
+try:
+    from omega_local.viz.mesh_training_preview import (
+        resize_rgb_and_intrinsics_for_preview,
+        update_mesh_training_contact_sheet,
+        write_mesh_training_preview,
+    )
+except Exception:  # pragma: no cover - optional local diagnostics only.
+    resize_rgb_and_intrinsics_for_preview = None
+    update_mesh_training_contact_sheet = None
+    write_mesh_training_preview = None
+
+try:
+    from omega_local.viz.regularization_preview import (
+        update_regularization_contact_sheet,
+        write_regularization_preview,
+    )
+except Exception:  # pragma: no cover - optional local diagnostics only.
+    update_regularization_contact_sheet = None
+    write_regularization_preview = None
+
+try:
+    from omega_local.losses.depth_regularization import compute_depth_regularization_loss
+except Exception:  # pragma: no cover - optional local extension only.
+    compute_depth_regularization_loss = None
+
+try:
+    from omega_local.losses.coplane_regularization import (
+        build_coplane_targets,
+        build_depth_plane_hypotheses,
+        compute_coplane_regularization_loss,
+        should_refresh_coplane_targets,
+    )
+except Exception:  # pragma: no cover - optional local extension only.
+    build_coplane_targets = None
+    build_depth_plane_hypotheses = None
+    compute_coplane_regularization_loss = None
+    should_refresh_coplane_targets = None
+
 
 @dataclass
 class Config:
@@ -49,6 +95,9 @@ class Config:
     disable_viewer: bool = False
     # Path to the .pt file. If provide, it will skip training and render a video
     ckpt: Optional[List[str]] = None
+    # Local training resume checkpoint. Unlike --ckpt, this continues training
+    # and restores mesh vertices/faces, splat parameters, and optimizer states.
+    resume_from_checkpoint: Optional[str] = None
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -104,6 +153,8 @@ class Config:
 
     # GSs with opacity below this value will be pruned
     prune_opa: float = 0.05
+    # GSs larger than this scene-scale fraction are pruned after the first opacity reset.
+    prune_scale3d: float = 0.1
 
     grow_scale3d: float = 0.01
 
@@ -173,6 +224,53 @@ class Config:
     # Iteration to start distortion loss regulerization
     dist_start_iter: int = 3_000
 
+    # OMeGa-4-Building depth regularization. Disabled by default so baseline
+    # configs stay comparable to OMeGa. When enabled, Guide01 depth priors add:
+    #   L_depth = lambda_d * mean_p w(p) * rho(D_render(p) - D_prior(p)).
+    building_depth_regularization_on: bool = False
+    building_depth_guide_dir: str = ""
+    building_depth_regularization_start_iter: int = 3_000
+    building_depth_lambda: float = 0.05
+    building_depth_huber_m: float = 0.05
+    building_depth_min_m: float = 0.05
+    building_depth_max_m: float = 15.0
+    building_depth_min_alpha: float = 0.05
+    building_depth_planar_weight: float = 1.0
+    building_depth_detail_weight: float = 0.25
+    building_depth_ridge_weight: float = 0.0
+    building_depth_distance_decay_m: float = 0.0
+
+    # OMeGa-4-Building coplane regularization. This is a mesh-space structural
+    # prior: every refresh window, current faces that already agree in normal
+    # and plane offset are grouped into stop-gradient target planes, then the
+    # optimizer penalizes vertex-to-plane distance and face-normal deviation.
+    building_coplane_regularization_on: bool = False
+    building_coplane_start_iter: int = 3_000
+    building_coplane_refresh_every: int = 500
+    building_coplane_point_lambda: float = 0.05
+    building_coplane_normal_lambda: float = 0.005
+    building_coplane_huber_m: float = 0.02
+    building_coplane_normal_angle_deg: float = 8.0
+    building_coplane_plane_distance_m: float = 0.03
+    building_coplane_min_faces: int = 24
+    building_coplane_min_group_area_m2: float = 0.01
+    building_coplane_min_face_area_m2: float = 1e-7
+    building_coplane_max_groups: int = 4096
+
+    # Optional depth-assisted coplane grouping. The depth guide proposes broad
+    # planes from locally planar pixels; mesh faces still need to pass current
+    # distance/normal checks before joining those larger groups.
+    building_coplane_depth_assist_on: bool = False
+    building_coplane_depth_planar_threshold: float = 0.65
+    building_coplane_depth_sample_stride: int = 8
+    building_coplane_depth_tile_size_px: int = 96
+    building_coplane_depth_min_tile_points: int = 64
+    building_coplane_depth_tile_fit_max_error_m: float = 0.04
+    building_coplane_depth_plane_distance_m: float = 0.08
+    building_coplane_depth_normal_angle_deg: float = 15.0
+    building_coplane_depth_min_plane_points: int = 600
+    building_coplane_depth_max_planes: int = 32
+
     # Model for splatting.
     model_type: Literal["2dgs", "2dgs-inria"] = "2dgs"
 
@@ -239,6 +337,29 @@ class Config:
 
     split_every: int = 500
 
+    # Local debug preview. This does not change optimization; it writes a
+    # fixed-camera RGB/splat/mesh/normal/wire contact sheet during training.
+    mesh_preview_on: bool = False
+    mesh_preview_every: int = 500
+    mesh_preview_frame: int = 0
+    mesh_preview_max_width: int = 900
+    mesh_preview_max_faces: int = 0
+    mesh_preview_near_plane: float = 0.05
+    mesh_preview_contact_sheet_images: int = 24
+    mesh_preview_rotate_clockwise: bool = True
+    mesh_preview_wire_thickness: int = 1
+    mesh_preview_wire_alpha: float = 0.30
+
+    # Local extension preview. It uses the same fixed camera frame as the mesh
+    # preview and visualizes what the depth/coplane losses see: prior depth,
+    # rendered depth, weighted residuals, coplane groups, and plane residuals.
+    regularization_preview_on: bool = False
+    regularization_preview_every: int = 500
+    regularization_preview_max_width: int = 900
+    regularization_preview_contact_sheet_images: int = 24
+    regularization_preview_depth_residual_scale_m: float = 0.25
+    regularization_preview_coplane_residual_vmax_m: float = 0.05
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -249,6 +370,10 @@ class Config:
         self.refine_stop_iter = int(self.refine_stop_iter * factor)
         self.reset_every = int(self.reset_every * factor)
         self.refine_every = int(self.refine_every * factor)
+        self.building_depth_regularization_start_iter = int(self.building_depth_regularization_start_iter * factor)
+        self.building_coplane_start_iter = int(self.building_coplane_start_iter * factor)
+        self.building_coplane_refresh_every = max(1, int(self.building_coplane_refresh_every * factor))
+        self.regularization_preview_every = max(1, int(self.regularization_preview_every * factor))
 
 def create_mesh_anchors_with_optimizers(
     parser: Parser,
@@ -476,6 +601,7 @@ class Runner:
         self.device = f"cuda:{local_rank}"
         self.run = run
         self.distributed = world_size > 1
+        self.resume_start_step = 0
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -493,6 +619,71 @@ class Runner:
         os.makedirs(self.eval_dir, exist_ok=True)
         self.vis_dir = f"{cfg.result_dir}/vis"
         os.makedirs(self.vis_dir, exist_ok=True)
+        self.mesh_preview_dir = f"{cfg.result_dir}/mesh_previews"
+        if cfg.mesh_preview_on:
+            os.makedirs(self.mesh_preview_dir, exist_ok=True)
+        self.regularization_preview_dir = f"{cfg.result_dir}/regularization_previews"
+        if cfg.regularization_preview_on:
+            os.makedirs(self.regularization_preview_dir, exist_ok=True)
+            if write_regularization_preview is None or update_regularization_contact_sheet is None:
+                raise ImportError("omega_local regularization preview renderer is unavailable. Check this checkout and PYTHONPATH.")
+        self.mesh_preview_frame_cache = None
+        self.building_coplane_targets = None
+        if cfg.building_depth_regularization_on:
+            if compute_depth_regularization_loss is None:
+                raise ImportError("omega_local depth regularization module is unavailable. Use the local runner so PYTHONPATH includes this repo.")
+            os.makedirs(self.stats_dir, exist_ok=True)
+            with open(f"{self.stats_dir}/building_depth_regularization_config.json", "w") as f:
+                json.dump(
+                    {
+                        "equation": "L_depth = lambda_d * mean_p w(p) * rho(D_render(p) - D_prior(p))",
+                        "guideDir": cfg.building_depth_guide_dir,
+                        "startIter": int(cfg.building_depth_regularization_start_iter),
+                        "lambda": float(cfg.building_depth_lambda),
+                        "huberMeters": float(cfg.building_depth_huber_m),
+                        "categoryWeights": {
+                            "localPlanar": float(cfg.building_depth_planar_weight),
+                            "detail": float(cfg.building_depth_detail_weight),
+                            "ridge": float(cfg.building_depth_ridge_weight),
+                        },
+                        "distanceDecayMeters": float(cfg.building_depth_distance_decay_m),
+                    },
+                    f,
+                    indent=2,
+                )
+            print(
+                "Enabled OMeGa-4-Building rendered-depth regularization. "
+                "Guide01 planar/detail/ridge probabilities weight the depth loss."
+            )
+        if cfg.building_coplane_regularization_on:
+            if build_coplane_targets is None or compute_coplane_regularization_loss is None or should_refresh_coplane_targets is None:
+                raise ImportError("omega_local coplane regularization module is unavailable. Use the local runner so PYTHONPATH includes this repo.")
+            os.makedirs(self.stats_dir, exist_ok=True)
+            with open(f"{self.stats_dir}/building_coplane_regularization_config.json", "w") as f:
+                json.dump(
+                    {
+                        "equation": "L_coplane = lambda_p * mean_f rho(n_g dot x_f + d_g) + lambda_n * mean_f (1 - |normal_f dot n_g|)",
+                        "startIter": int(cfg.building_coplane_start_iter),
+                        "refreshEvery": int(cfg.building_coplane_refresh_every),
+                        "pointLambda": float(cfg.building_coplane_point_lambda),
+                        "normalLambda": float(cfg.building_coplane_normal_lambda),
+                        "huberMeters": float(cfg.building_coplane_huber_m),
+                        "grouping": {
+                            "normalAngleDegrees": float(cfg.building_coplane_normal_angle_deg),
+                            "planeDistanceMeters": float(cfg.building_coplane_plane_distance_m),
+                            "minFaces": int(cfg.building_coplane_min_faces),
+                            "minGroupAreaM2": float(cfg.building_coplane_min_group_area_m2),
+                            "minFaceAreaM2": float(cfg.building_coplane_min_face_area_m2),
+                            "maxGroups": int(cfg.building_coplane_max_groups),
+                        },
+                    },
+                    f,
+                    indent=2,
+                )
+            print(
+                "Enabled OMeGa-4-Building coplane regularization. "
+                "Mesh faces are periodically grouped into cached plane targets."
+            )
 
         # Load data: Training data should contain initial points and colors.
         self.parser = Parser(
@@ -502,6 +693,8 @@ class Runner:
             vfm_init=cfg.vfm_init,
             test_every=cfg.test_every,
             load_normal_maps=cfg.normal_map_on,
+            load_building_depth_guides=cfg.building_depth_regularization_on,
+            building_depth_guide_dir=cfg.building_depth_guide_dir,
         )
         self.trainset = Dataset(
             self.parser,
@@ -584,8 +777,11 @@ class Runner:
         # Strategy
         self.strategy = MeshGSStrategy(
             verbose=True,
+            prune_opa=cfg.prune_opa,
+            prune_scale3d=cfg.prune_scale3d,
             grow_scale3d=cfg.grow_scale3d,
             grow_grad2d=cfg.grow_grad2d,
+            pause_refine_after_reset=cfg.pause_refine_after_reset,
             refine_start_iter=cfg.refine_start_iter,
             refine_stop_iter=cfg.refine_stop_iter,
             refine_every=cfg.refine_every,
@@ -596,6 +792,8 @@ class Runner:
             remove_cd_norm=cfg.remove_cd_norm,
             remove_every=cfg.remove_every,
             remove_start_iter=cfg.remove_start_iter,
+            revised_opacity=cfg.revised_opacity,
+            absgrad=cfg.absgrad,
             key_for_gradient=key_for_gradient,
         )
 
@@ -651,6 +849,9 @@ class Runner:
             ]
             if world_size > 1:
                 self.app_module = DDP(self.app_module)
+
+        if cfg.resume_from_checkpoint is not None:
+            self._restore_training_checkpoint(Path(cfg.resume_from_checkpoint))
 
         # Losses & Metrics.
 
@@ -743,6 +944,422 @@ class Runner:
             info,
         )
 
+    def _load_mesh_preview_frame(self):
+        """Load one fixed parser-frame image and camera for debug previews."""
+
+        if self.mesh_preview_frame_cache is not None:
+            return self.mesh_preview_frame_cache
+
+        frame_index = int(np.clip(self.cfg.mesh_preview_frame, 0, len(self.parser.image_names) - 1))
+        image = imageio.imread(self.parser.image_paths[frame_index])[..., :3]
+        building_depth_guide = None
+        if self.parser.load_building_depth_guides and self.parser.building_depth_guide_paths is not None:
+            building_depth_guide = _load_building_depth_guide_npz(self.parser.building_depth_guide_paths[frame_index])
+            building_depth_guide = _resize_guide_maps(
+                building_depth_guide,
+                width=int(image.shape[1]),
+                height=int(image.shape[0]),
+            )
+        camera_id = self.parser.camera_ids[frame_index]
+        K = self.parser.Ks_dict[camera_id].copy()
+        params = self.parser.params_dict[camera_id]
+        camtoworld = self.parser.camtoworlds[frame_index]
+
+        if len(params) > 0:
+            mapx, mapy = self.parser.mapx_dict[camera_id], self.parser.mapy_dict[camera_id]
+            x, y, w, h = self.parser.roi_undist_dict[camera_id]
+            image = cv2.remap(image, mapx, mapy, cv2.INTER_LINEAR)
+            image = image[y : y + h, x : x + w]
+            if building_depth_guide is not None:
+                building_depth_guide = _remap_guide_maps(building_depth_guide, mapx, mapy)
+                building_depth_guide = _crop_guide_maps(building_depth_guide, x, y, w, h)
+
+        self.mesh_preview_frame_cache = {
+            "frame_index": frame_index,
+            "image": image,
+            "K": K,
+            "camtoworld": camtoworld,
+            "building_depth_guide": building_depth_guide,
+        }
+        return self.mesh_preview_frame_cache
+
+    @torch.no_grad()
+    def _maybe_write_mesh_preview(self, step: int, max_steps: int, *, phase: str = "pre") -> None:
+        """Write a fixed-view preview without changing OMeGa's optimization."""
+
+        if not self.cfg.mesh_preview_on or self.world_rank != 0:
+            return
+        if (
+            resize_rgb_and_intrinsics_for_preview is None
+            or write_mesh_training_preview is None
+            or update_mesh_training_contact_sheet is None
+        ):
+            raise ImportError("omega_local mesh preview renderer is unavailable. Check this checkout and PYTHONPATH.")
+
+        every = max(int(self.cfg.mesh_preview_every), 1)
+        if phase == "pre":
+            should_write = step == 0 or step % every == 0
+        elif phase == "final":
+            should_write = step == max_steps - 1
+        else:
+            should_write = False
+        if not should_write:
+            return
+
+        frame = self._load_mesh_preview_frame()
+        rgb_preview, K_preview, _ = resize_rgb_and_intrinsics_for_preview(
+            frame["image"],
+            frame["K"],
+            max_width=int(self.cfg.mesh_preview_max_width),
+        )
+        preview_height, preview_width = rgb_preview.shape[:2]
+
+        # Scheduled "pre" previews are called immediately after the normal
+        # training-loop update_gs call, so do not recompute derived splat tensors
+        # under no_grad here; doing so would detach the graph used by the
+        # upcoming training render. The final preview happens after the last
+        # optimizer step, so it needs one explicit refresh.
+        if phase == "final":
+            update_gs(self.cfg, self.mesh_params, self.splats, self.optimizers, self.world_size)
+        camtoworld = torch.from_numpy(frame["camtoworld"]).float().to(self.device)
+        K = torch.from_numpy(K_preview).float().to(self.device)
+        splat_colors, _, _, _, _, _, _, _ = self.rasterize_splats(
+            camtoworlds=camtoworld[None],
+            Ks=K[None],
+            width=int(preview_width),
+            height=int(preview_height),
+            sh_degree=self.cfg.sh_degree,
+            near_plane=self.cfg.near_plane,
+            far_plane=self.cfg.far_plane,
+            render_mode="RGB+ED",
+        )
+        splat_rgb = torch.clamp(splat_colors[0, ..., :3], 0.0, 1.0).detach().cpu().numpy()
+        splat_rgb = (splat_rgb * 255.0).astype(np.uint8)
+
+        vertices = self.mesh_params["vertices"].detach().cpu().numpy()
+        faces = self.mesh_params["faces"].detach().cpu().numpy()
+        summary = write_mesh_training_preview(
+            out_dir=Path(self.mesh_preview_dir),
+            step=step,
+            frame_index=int(frame["frame_index"]),
+            phase=phase,
+            vertices=vertices,
+            faces=faces,
+            K=K_preview,
+            camtoworld=frame["camtoworld"],
+            rgb=rgb_preview,
+            splat_rgb=splat_rgb,
+            max_width=0,
+            near_plane=float(self.cfg.mesh_preview_near_plane),
+            max_faces=int(self.cfg.mesh_preview_max_faces),
+            rotate_clockwise=bool(self.cfg.mesh_preview_rotate_clockwise),
+            wire_thickness=int(self.cfg.mesh_preview_wire_thickness),
+            wire_alpha=float(self.cfg.mesh_preview_wire_alpha),
+        )
+        update_mesh_training_contact_sheet(
+            preview_dir=Path(self.mesh_preview_dir),
+            max_images=int(self.cfg.mesh_preview_contact_sheet_images),
+        )
+        with open(f"{self.stats_dir}/mesh_preview.jsonl", "a") as f:
+            f.write(json.dumps(summary) + "\n")
+        print(
+            "[mesh-preview] "
+            f"step={step} phase={phase} frame={summary['frame_index']} faces_rendered={summary['rendered_face_count']} "
+            f"path={summary['path']}"
+        )
+
+    @torch.no_grad()
+    def _maybe_write_regularization_preview(self, step: int, max_steps: int, *, phase: str = "pre") -> None:
+        """Write fixed-frame diagnostics for depth and coplane regularizers."""
+
+        if not self.cfg.regularization_preview_on or self.world_rank != 0:
+            return
+        if not (self.cfg.building_depth_regularization_on or self.cfg.building_coplane_regularization_on):
+            return
+        if write_regularization_preview is None or update_regularization_contact_sheet is None:
+            raise ImportError("omega_local regularization preview renderer is unavailable. Check this checkout and PYTHONPATH.")
+
+        every = max(int(self.cfg.regularization_preview_every), 1)
+        if phase == "pre":
+            should_write = step == 0 or step % every == 0
+        elif phase == "final":
+            should_write = step == max_steps - 1
+        else:
+            should_write = False
+        if not should_write:
+            return
+
+        if self.cfg.building_coplane_regularization_on and step >= self.cfg.building_coplane_start_iter:
+            self._maybe_refresh_building_coplane_targets(step)
+
+        frame = self._load_mesh_preview_frame()
+        rgb_preview, K_preview, _ = resize_rgb_and_intrinsics_for_preview(
+            frame["image"],
+            frame["K"],
+            max_width=int(self.cfg.regularization_preview_max_width),
+        )
+        preview_height, preview_width = rgb_preview.shape[:2]
+
+        # Like mesh previews, scheduled pre-step diagnostics use the existing
+        # update_gs result. Final diagnostics happen after the last optimizer
+        # step, so refresh the mesh-controlled splat tensors once.
+        if phase == "final":
+            update_gs(self.cfg, self.mesh_params, self.splats, self.optimizers, self.world_size)
+        camtoworld = torch.from_numpy(frame["camtoworld"]).float().to(self.device)
+        K = torch.from_numpy(K_preview).float().to(self.device)
+        _, alphas, _, _, _, _, render_depths, _ = self.rasterize_splats(
+            camtoworlds=camtoworld[None],
+            Ks=K[None],
+            width=int(preview_width),
+            height=int(preview_height),
+            sh_degree=self.cfg.sh_degree,
+            near_plane=self.cfg.near_plane,
+            far_plane=self.cfg.far_plane,
+            render_mode="RGB+D",
+            distloss=False,
+        )
+
+        guide = frame.get("building_depth_guide") or {}
+        vertices = self.mesh_params["vertices"].detach().cpu().numpy()
+        faces = self.mesh_params["faces"].detach().cpu().numpy()
+        summary = write_regularization_preview(
+            out_dir=Path(self.regularization_preview_dir),
+            step=step,
+            frame_index=int(frame["frame_index"]),
+            phase=phase,
+            rotate_clockwise=bool(self.cfg.mesh_preview_rotate_clockwise),
+            rgb=frame["image"],
+            K=frame["K"],
+            camtoworld=frame["camtoworld"],
+            rendered_depth=render_depths.detach().cpu().numpy(),
+            rendered_alpha=alphas.detach().cpu().numpy(),
+            depth_prior=guide.get("depth"),
+            depth_valid=guide.get("valid"),
+            p_planar=guide.get("p_local_planar"),
+            p_detail=guide.get("p_detail"),
+            p_ridge=guide.get("p_ridge"),
+            vertices=vertices,
+            faces=faces,
+            coplane_targets=self.building_coplane_targets,
+            max_width=int(self.cfg.regularization_preview_max_width),
+            near_plane=float(self.cfg.mesh_preview_near_plane),
+            depth_min_m=float(self.cfg.building_depth_min_m),
+            depth_max_m=float(self.cfg.building_depth_max_m),
+            depth_alpha_min=float(self.cfg.building_depth_min_alpha),
+            depth_planar_weight=float(self.cfg.building_depth_planar_weight),
+            depth_detail_weight=float(self.cfg.building_depth_detail_weight),
+            depth_ridge_weight=float(self.cfg.building_depth_ridge_weight),
+            depth_distance_decay_m=float(self.cfg.building_depth_distance_decay_m),
+            residual_scale_m=float(self.cfg.regularization_preview_depth_residual_scale_m),
+            coplane_residual_vmax_m=float(self.cfg.regularization_preview_coplane_residual_vmax_m),
+        )
+        update_regularization_contact_sheet(
+            preview_dir=Path(self.regularization_preview_dir),
+            max_images=int(self.cfg.regularization_preview_contact_sheet_images),
+        )
+        with open(f"{self.stats_dir}/regularization_preview.jsonl", "a") as f:
+            f.write(json.dumps(summary) + "\n")
+        print(
+            "[regularization-preview] "
+            f"step={step} phase={phase} frame={summary['frame_index']} "
+            f"depth_pixels={int(summary['depth_used_pixels'])} "
+            f"coplane_faces={int(summary['active_coplane_faces'])} "
+            f"path={summary['path']}"
+        )
+
+    @torch.no_grad()
+    def _maybe_refresh_building_coplane_targets(self, step: int) -> None:
+        """Refresh stop-gradient plane targets for coplane regularization.
+
+        This is intentionally outside the differentiable loss.  Plane grouping
+        is a structural hypothesis built from the current mesh; the following
+        optimization window then treats those fitted planes as fixed targets.
+        """
+
+        if not self.cfg.building_coplane_regularization_on:
+            return
+        if not should_refresh_coplane_targets(
+            targets=self.building_coplane_targets,
+            face_count=int(self.mesh_params["faces"].shape[0]),
+            step=int(step),
+            refresh_every=int(self.cfg.building_coplane_refresh_every),
+        ):
+            return
+
+        depth_planes = None
+        if bool(self.cfg.building_coplane_depth_assist_on):
+            if build_depth_plane_hypotheses is None:
+                raise ImportError("omega_local depth-assisted coplane grouping is unavailable. Check PYTHONPATH.")
+            frame = self._load_mesh_preview_frame()
+            guide = frame.get("building_depth_guide")
+            if guide is not None:
+                # Depth-assisted grouping is a soft merge hint, not a direct
+                # hard assignment. We fit broad planes from high-confidence
+                # locally planar depth pixels, then only accept mesh faces that
+                # already lie near those planes with compatible normals.
+                depth_planes = build_depth_plane_hypotheses(
+                    depth=guide["depth"],
+                    valid=guide["valid"],
+                    p_planar=guide["p_local_planar"],
+                    K=frame["K"],
+                    camtoworld=frame["camtoworld"],
+                    device=self.device,
+                    dtype=self.mesh_params["vertices"].dtype,
+                    min_depth_m=float(self.cfg.building_depth_min_m),
+                    max_depth_m=float(self.cfg.building_depth_max_m),
+                    planar_threshold=float(self.cfg.building_coplane_depth_planar_threshold),
+                    sample_stride=int(self.cfg.building_coplane_depth_sample_stride),
+                    tile_size_px=int(self.cfg.building_coplane_depth_tile_size_px),
+                    min_tile_points=int(self.cfg.building_coplane_depth_min_tile_points),
+                    tile_fit_max_error_m=float(self.cfg.building_coplane_depth_tile_fit_max_error_m),
+                    normal_angle_deg=float(self.cfg.building_coplane_depth_normal_angle_deg),
+                    plane_distance_m=float(self.cfg.building_coplane_depth_plane_distance_m),
+                    min_plane_points=int(self.cfg.building_coplane_depth_min_plane_points),
+                    max_planes=int(self.cfg.building_coplane_depth_max_planes),
+                )
+
+        self.building_coplane_targets = build_coplane_targets(
+            vertices=self.mesh_params["vertices"],
+            faces=self.mesh_params["faces"],
+            step=int(step),
+            normal_angle_deg=float(self.cfg.building_coplane_normal_angle_deg),
+            plane_distance_m=float(self.cfg.building_coplane_plane_distance_m),
+            min_faces=int(self.cfg.building_coplane_min_faces),
+            min_group_area_m2=float(self.cfg.building_coplane_min_group_area_m2),
+            min_face_area_m2=float(self.cfg.building_coplane_min_face_area_m2),
+            max_groups=int(self.cfg.building_coplane_max_groups),
+            depth_planes=depth_planes,
+            depth_plane_distance_m=float(self.cfg.building_coplane_depth_plane_distance_m),
+            depth_normal_angle_deg=float(self.cfg.building_coplane_depth_normal_angle_deg),
+        )
+        stats = dict(self.building_coplane_targets.stats)
+        if self.world_rank == 0:
+            with open(f"{self.stats_dir}/building_coplane_groups.jsonl", "a") as f:
+                f.write(json.dumps(stats) + "\n")
+            print(
+                "[building-coplane] "
+                f"step={step} groups={int(stats['accepted_groups'])} "
+                f"faces={int(stats['accepted_faces'])}/{int(stats['total_faces'])} "
+                f"coverage={stats['accepted_face_fraction']:.3f} "
+                f"depth_planes={int(stats.get('depth_plane_hypotheses', 0))} "
+                f"depth_faces={int(stats.get('depth_assisted_faces', 0))}"
+            )
+
+    def _learnable_splat_names(self) -> list[str]:
+        if self.cfg.app_opt:
+            return ["uv_sum", "u_ratio", "scale_lambda", "rot_2d", "features", "colors", "opacities"]
+        return ["uv_sum", "u_ratio", "scale_lambda", "rot_2d", "sh0", "shN", "opacities"]
+
+    def _tensor_checkpoint_dict(self, values: dict) -> dict:
+        payload = {}
+        for key, value in values.items():
+            if isinstance(value, torch.Tensor):
+                payload[key] = value.detach().cpu()
+        return payload
+
+    def _bind_optimizer_param(self, name: str, param: torch.nn.Parameter) -> None:
+        if name in self.optimizers:
+            self.optimizers[name].param_groups[0]["params"] = [param]
+
+    def _restore_training_checkpoint(self, path: Path) -> None:
+        """Restore a local training-resume checkpoint.
+
+        This is distinct from OMeGa's ``--ckpt`` mesh-export path.  Continuing
+        mesh optimization needs more than saved splat tensors: the mesh
+        vertices/faces, trainable splat parameters, optimizer state, and next
+        global step must be restored so baseline and extension branches share
+        exactly the same warmup.
+        """
+
+        if not path.exists():
+            raise FileNotFoundError(f"Missing resume checkpoint: {path}")
+        print(f"Restoring OMeGa training state from {path}")
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        if "mesh_params" not in ckpt or "splats" not in ckpt:
+            raise ValueError(f"Checkpoint is not a training-resume checkpoint: {path}")
+
+        mesh_payload = ckpt["mesh_params"]
+        self.mesh_params["vertices"] = torch.nn.Parameter(mesh_payload["vertices"].to(self.device).float())
+        self.mesh_params["faces"] = mesh_payload["faces"].to(self.device).long()
+        self._bind_optimizer_param("vertices", self.mesh_params["vertices"])
+
+        learnable = set(self._learnable_splat_names())
+        for key, value in ckpt["splats"].items():
+            if not isinstance(value, torch.Tensor):
+                continue
+            restored = value.to(self.device)
+            self.splats[key] = torch.nn.Parameter(restored) if key in learnable else restored
+            if key in learnable:
+                self._bind_optimizer_param(key, self.splats[key])
+
+        optimizer_payload = ckpt.get("optimizers", {})
+        for name, state in optimizer_payload.items():
+            if name in self.optimizers:
+                self.optimizers[name].load_state_dict(state)
+
+        self.strategy_state.update(ckpt.get("strategy_state", {}))
+        self.mesh_state.update(ckpt.get("mesh_state", {}))
+        self.resume_start_step = int(ckpt.get("next_step", int(ckpt.get("step", -1)) + 1))
+        print(f"Resuming training at global step {self.resume_start_step}")
+
+        if self.cfg.pose_opt and "pose_adjust" in ckpt:
+            module = self.pose_adjust.module if self.world_size > 1 else self.pose_adjust
+            module.load_state_dict(ckpt["pose_adjust"])
+        if self.cfg.app_opt and "app_module" in ckpt:
+            module = self.app_module.module if self.world_size > 1 else self.app_module
+            module.load_state_dict(ckpt["app_module"])
+
+    def _save_training_checkpoint(self, step: int, global_tic: float) -> None:
+        """Save a post-optimizer checkpoint suitable for branching experiments."""
+
+        with torch.no_grad():
+            update_gs(self.cfg, self.mesh_params, self.splats, self.optimizers, self.world_size)
+
+        mem = torch.cuda.max_memory_allocated() / 1024**3
+        stats = {
+            "mem": mem,
+            "ellipse_time": time.time() - global_tic,
+            "num_GS": len(self.splats["means"]),
+            "num_faces": len(self.mesh_params["faces"]),
+            "step": int(step),
+            "next_step": int(step) + 1,
+        }
+        print("Step: ", step, stats)
+        with open(f"{self.stats_dir}/train_step{step:05d}.json", "w") as f:
+            json.dump(stats, f)
+
+        data = {
+            "schema": "omega_4_building.training_resume.v1",
+            "step": int(step),
+            "next_step": int(step) + 1,
+            "splats": self._tensor_checkpoint_dict(self.splats),
+            "mesh_params": self._tensor_checkpoint_dict(self.mesh_params),
+            "optimizers": {name: optimizer.state_dict() for name, optimizer in self.optimizers.items()},
+            "strategy_state": self._tensor_checkpoint_dict(self.strategy_state),
+            "mesh_state": self._tensor_checkpoint_dict(self.mesh_state),
+        }
+        if self.cfg.pose_opt:
+            data["pose_adjust"] = (self.pose_adjust.module if self.world_size > 1 else self.pose_adjust).state_dict()
+        if self.cfg.app_opt:
+            data["app_module"] = (self.app_module.module if self.world_size > 1 else self.app_module).state_dict()
+
+        torch.save(data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt")
+
+        point_cloud_path = f"{self.ply_dir}/ply_{step:05d}_rank{self.world_rank}.ply"
+        save_ply(point_cloud_path, self.splats)
+
+        vertices = self.mesh_params["vertices"].detach().cpu().numpy()
+        faces = self.mesh_params["faces"].cpu().numpy()
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        mesh.triangles = o3d.utility.Vector3iVector(faces)
+        o3d.io.write_triangle_mesh(f"{self.ply_dir}/mesh_{step:05d}_rank{self.world_rank}.ply", mesh)
+
+        if self.world_size > 1:
+            dist.barrier()
+            if self.world_rank == 0:
+                merge_ply(self.ply_dir, step, self.world_size)
+
     def train(self):
         cfg = self.cfg
         device = self.device
@@ -755,7 +1372,9 @@ class Runner:
                 json.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
-        init_step = 0
+        init_step = int(self.resume_start_step)
+        if init_step >= max_steps:
+            raise ValueError(f"resume_from_checkpoint starts at step {init_step}, but max_steps is {max_steps}.")
 
         schedulers = [
             torch.optim.lr_scheduler.ExponentialLR(
@@ -791,6 +1410,8 @@ class Runner:
                 torch.cuda.empty_cache()
             
             update_gs(cfg, self.mesh_params, self.splats, self.optimizers, world_size)
+            self._maybe_write_mesh_preview(step, max_steps, phase="pre")
+            self._maybe_write_regularization_preview(step, max_steps, phase="pre")
 
             if not cfg.disable_viewer:
                 while self.viewer.state.status == "paused":
@@ -827,8 +1448,11 @@ class Runner:
             h, w = pixels.shape[1:3]
             mask = torch.ones((1, h, w, 1), dtype=torch.bool).to(device)
 
+            normal_map_valid = None
             if self.cfg.mono_normal_loss or self.cfg.normal_map_on:
                 normal_map = data["normal_map"].to(device)
+                if "normal_map_valid" in data:
+                    normal_map_valid = data["normal_map_valid"].to(device).bool()
             
             # forward
             (
@@ -874,14 +1498,20 @@ class Runner:
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
 
             
+            mesh_normal_consistency_loss = torch.tensor(0.0, device=device)
+            mesh_smooth_loss = torch.tensor(0.0, device=device)
+            scaled_mesh_normal_loss = torch.tensor(0.0, device=device)
+            scaled_mesh_smooth_loss = torch.tensor(0.0, device=device)
             if cfg.mesh_loss and step >= cfg.mesh_loss_start_iter:
                 mesh = Meshes(verts=[self.mesh_params["vertices"]], faces=[self.mesh_params["faces"]])
 
                 mesh_normal_consistency_loss = mesh_normal_consistency(mesh)
-                loss += cfg.mesh_normal_consistency_lambda  * mesh_normal_consistency_loss
+                scaled_mesh_normal_loss = cfg.mesh_normal_consistency_lambda * mesh_normal_consistency_loss
+                loss += scaled_mesh_normal_loss
 
                 mesh_smooth_loss = mesh_laplacian_smoothing(mesh)
-                loss += (cfg.mesh_smooth_lambda / self.strategy_state['scene_scale']) * mesh_smooth_loss
+                scaled_mesh_smooth_loss = (cfg.mesh_smooth_lambda / self.strategy_state['scene_scale']) * mesh_smooth_loss
+                loss += scaled_mesh_smooth_loss
 
             # plane normals with pseudo normals
             mono_normal_loss = torch.tensor(0.0, device=device)
@@ -892,15 +1522,24 @@ class Runner:
                 normals = render_normals.clone().squeeze(0)             # [H, W, 3]: world coordinate
                 normals = normals / torch.norm(normals, dim=-1, keepdim=True).clamp(min=1e-6)  # normalize
 
-                abs_diff = torch.abs(normal_map * mask - normals * mask)
+                normal_loss_mask = mask
+                if normal_map_valid is not None:
+                    normal_loss_mask = normal_loss_mask & normal_map_valid.unsqueeze(-1)
+                normal_loss_mask_f = normal_loss_mask.squeeze(0).float()
+
+                abs_diff = torch.abs(normal_map - normals)
                 alpha = 2.0
                 beta = 2.0
                 focal_weight = alpha * (1 - torch.exp(-beta * abs_diff))
-                weighted_diff = focal_weight * abs_diff
-                mono_normal_loss = self.cfg.mono_normal_lambda * torch.mean(weighted_diff)
+                weighted_diff = focal_weight * abs_diff * normal_loss_mask_f
+                valid_normal_values = normal_loss_mask_f.sum() * 3.0
+                if bool((valid_normal_values > 0).detach().item()):
+                    mono_normal_loss = self.cfg.mono_normal_lambda * weighted_diff.sum() / valid_normal_values.clamp(min=1.0)
                 
                 loss += mono_normal_loss
 
+            distloss = torch.tensor(0.0, device=device)
+            curr_dist_lambda = 0.0
             if cfg.dist_loss:
                 if step > cfg.dist_start_iter:
                     curr_dist_lambda = cfg.dist_lambda
@@ -908,6 +1547,75 @@ class Runner:
                     curr_dist_lambda = 0.0
                 distloss = render_distort.mean()
                 loss += distloss * curr_dist_lambda
+
+            building_depth_loss = torch.tensor(0.0, device=device)
+            scaled_building_depth_loss = torch.tensor(0.0, device=device)
+            building_depth_stats = {
+                "used_depth_pixels": 0.0,
+                "mean_depth_weight": 0.0,
+                "mean_abs_depth_error_m": 0.0,
+            }
+            if cfg.building_depth_regularization_on and step >= cfg.building_depth_regularization_start_iter:
+                # OMeGa-4-Building depth prior:
+                #   L_depth = lambda_d * mean_p w(p) * rho(D_render(p) - D_prior(p)).
+                #
+                # w(p) is built from Guide01 soft geometry probabilities. Planar
+                # pixels can have high weight, ridge/detail pixels can be weak,
+                # and unknown pixels are ignored. D_render is differentiable, so
+                # this loss moves the mesh-controlled splats and therefore the
+                # underlying mesh vertices.
+                (
+                    scaled_building_depth_loss,
+                    building_depth_loss,
+                    building_depth_stats,
+                ) = compute_depth_regularization_loss(
+                    render_depth=render_depths,
+                    render_alpha=alphas,
+                    batch=data,
+                    depth_lambda=float(cfg.building_depth_lambda),
+                    huber_delta_m=float(cfg.building_depth_huber_m),
+                    min_depth_m=float(cfg.building_depth_min_m),
+                    max_depth_m=float(cfg.building_depth_max_m),
+                    min_alpha=float(cfg.building_depth_min_alpha),
+                    planar_weight=float(cfg.building_depth_planar_weight),
+                    detail_weight=float(cfg.building_depth_detail_weight),
+                    ridge_weight=float(cfg.building_depth_ridge_weight),
+                    distance_decay_m=float(cfg.building_depth_distance_decay_m),
+                )
+                loss += scaled_building_depth_loss
+
+            building_coplane_loss = torch.tensor(0.0, device=device)
+            building_coplane_point_loss = torch.tensor(0.0, device=device)
+            building_coplane_normal_loss = torch.tensor(0.0, device=device)
+            building_coplane_stats = {
+                "active_faces": 0.0,
+                "mean_abs_plane_distance_m": 0.0,
+            }
+            if cfg.building_coplane_regularization_on and step >= cfg.building_coplane_start_iter:
+                # OMeGa-4-Building coplane prior:
+                #   L_coplane =
+                #       lambda_p * mean_f rho(n_g dot x_f + d_g)
+                #     + lambda_n * mean_f (1 - |normal_f dot n_g|).
+                #
+                # Plane groups (n_g, d_g) are refreshed without gradients every
+                # few hundred iterations from faces that already look coplanar.
+                # This makes the loss a soft structural pull toward larger flat
+                # architectural regions without hard-snapping vertices.
+                self._maybe_refresh_building_coplane_targets(step)
+                (
+                    building_coplane_loss,
+                    building_coplane_point_loss,
+                    building_coplane_normal_loss,
+                    building_coplane_stats,
+                ) = compute_coplane_regularization_loss(
+                    vertices=self.mesh_params["vertices"],
+                    faces=self.mesh_params["faces"],
+                    targets=self.building_coplane_targets,
+                    point_lambda=float(cfg.building_coplane_point_lambda),
+                    normal_lambda=float(cfg.building_coplane_normal_lambda),
+                    huber_delta_m=float(cfg.building_coplane_huber_m),
+                )
+                loss += building_coplane_loss
             
             loss.backward()
             
@@ -935,11 +1643,44 @@ class Runner:
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.dist_loss:
                 desc += f"dist loss={distloss.item():.6f}"
+            if cfg.building_depth_regularization_on:
+                desc += f" depth={scaled_building_depth_loss.item():.6f}"
+            if cfg.building_coplane_regularization_on:
+                desc += f" coplane={building_coplane_loss.item():.6f}"
             if cfg.pose_opt and cfg.pose_noise:
                 # monitor the pose error if we inject noise
                 pose_err = F.l1_loss(camtoworlds_gt, camtoworlds)
                 desc += f"pose err={pose_err.item():.6f}| "
             pbar.set_description(desc)
+
+            if world_rank == 0 and cfg.log_every > 0 and step % cfg.log_every == 0:
+                loss_stats = {
+                    "step": int(step),
+                    "loss": float(loss.detach().cpu()),
+                    "l1loss": float(l1loss.detach().cpu()),
+                    "ssimloss": float(ssimloss.detach().cpu()),
+                    "mesh_normal_consistency_loss": float(mesh_normal_consistency_loss.detach().cpu()),
+                    "scaled_mesh_normal_consistency_loss": float(scaled_mesh_normal_loss.detach().cpu()),
+                    "mesh_smooth_loss": float(mesh_smooth_loss.detach().cpu()),
+                    "scaled_mesh_smooth_loss": float(scaled_mesh_smooth_loss.detach().cpu()),
+                    "mono_normal_loss": float(mono_normal_loss.detach().cpu()),
+                    "distloss": float(distloss.detach().cpu()),
+                    "dist_lambda": float(curr_dist_lambda),
+                    "building_depth_loss": float(building_depth_loss.detach().cpu()),
+                    "scaled_building_depth_loss": float(scaled_building_depth_loss.detach().cpu()),
+                    "building_depth_used_pixels": float(building_depth_stats["used_depth_pixels"]),
+                    "building_depth_mean_weight": float(building_depth_stats["mean_depth_weight"]),
+                    "building_depth_mean_abs_error_m": float(building_depth_stats["mean_abs_depth_error_m"]),
+                    "building_coplane_loss": float(building_coplane_loss.detach().cpu()),
+                    "building_coplane_point_loss": float(building_coplane_point_loss.detach().cpu()),
+                    "building_coplane_normal_loss": float(building_coplane_normal_loss.detach().cpu()),
+                    "building_coplane_active_faces": float(building_coplane_stats["active_faces"]),
+                    "building_coplane_mean_abs_plane_distance_m": float(building_coplane_stats["mean_abs_plane_distance_m"]),
+                    "num_GS": int(len(self.splats["means"])),
+                    "num_faces": int(len(self.mesh_params["faces"])),
+                }
+                with open(f"{self.stats_dir}/train_loss.jsonl", "a") as f:
+                    f.write(json.dumps(loss_stats) + "\n")
 
             if world_rank == 0 and cfg.wandb_on and cfg.log_every > 0 and step % cfg.log_every == 0:
                 mem = torch.cuda.max_memory_allocated() / 1024**3
@@ -953,6 +1694,25 @@ class Runner:
                     self.run.log({"train/mono_normal_loss": mono_normal_loss.item()}, step)
                 if cfg.dist_loss:
                     self.run.log({"train/distloss": distloss.item()}, step)
+                if cfg.building_depth_regularization_on:
+                    self.run.log(
+                        {
+                            "train/building_depth_loss": building_depth_loss.item(),
+                            "train/scaled_building_depth_loss": scaled_building_depth_loss.item(),
+                            "train/building_depth_used_pixels": building_depth_stats["used_depth_pixels"],
+                        },
+                        step,
+                    )
+                if cfg.building_coplane_regularization_on:
+                    self.run.log(
+                        {
+                            "train/building_coplane_loss": building_coplane_loss.item(),
+                            "train/building_coplane_point_loss": building_coplane_point_loss.item(),
+                            "train/building_coplane_normal_loss": building_coplane_normal_loss.item(),
+                            "train/building_coplane_active_faces": building_coplane_stats["active_faces"],
+                        },
+                        step,
+                    )
                 if cfg.log_save_image and step % (cfg.log_every * 5) == 0:
                     canvas = torch.cat([pixels, colors[..., :3]], dim=2).detach().cpu().numpy()
                     canvas = canvas.reshape(-1, *canvas.shape[2:])
@@ -978,53 +1738,7 @@ class Runner:
                         # merge ply of diffrent world ranks
                         merge_ply(self.ply_dir, step, self.world_size)
 
-            # save checkpoint
-            if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
-                mem = torch.cuda.max_memory_allocated() / 1024**3
-                stats = {
-                    "mem": mem,
-                    "ellipse_time": time.time() - global_tic,
-                    "num_GS": len(self.splats["means"]),
-                }
-                print("Step: ", step, stats)
-                with open(f"{self.stats_dir}/train_step{step:05d}.json", "w") as f:
-                    json.dump(stats, f)
-
-                data = {"step": step, "splats": self.splats}
-                if cfg.pose_opt:
-                    if world_size > 1:
-                        data["pose_adjust"] = self.pose_adjust.module.state_dict()
-                    else:
-                        data["pose_adjust"] = self.pose_adjust.state_dict()
-                if cfg.app_opt:
-                    if world_size > 1:
-                        data["app_module"] = self.app_module.module.state_dict()
-                    else:
-                        data["app_module"] = self.app_module.state_dict()
-
-                # save .pt
-                torch.save(
-                    data, f"{self.ckpt_dir}/ckpt_{step}_rank{self.world_rank}.pt",
-                )
-                
-                # save .ply
-                point_cloud_path = f"{self.ply_dir}/ply_{step:05d}_rank{self.world_rank}.ply"
-                save_ply(point_cloud_path, self.splats)
-
-                vertices = self.mesh_params["vertices"].detach().cpu().numpy()
-                faces = self.mesh_params["faces"].cpu().numpy()
-                
-                mesh = o3d.geometry.TriangleMesh()
-                mesh.vertices = o3d.utility.Vector3dVector(vertices)
-                mesh.triangles = o3d.utility.Vector3iVector(faces)
-                o3d.io.write_triangle_mesh(f"{self.ply_dir}/mesh_{step:05d}_rank{self.world_rank}.ply", mesh)
-                
-                if world_size > 1:
-                    dist.barrier()
-
-                    if world_rank == 0:
-                        # merge ply of diffrent world ranks
-                        merge_ply(self.ply_dir, step, self.world_size)
+            should_save_checkpoint = step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1
 
             # Densify
             self.strategy.step_post_backward(
@@ -1077,6 +1791,10 @@ class Runner:
                 state=self.strategy_state,
                 mesh_state=self.mesh_state,
             )
+            self._maybe_write_mesh_preview(step, max_steps, phase="final")
+            self._maybe_write_regularization_preview(step, max_steps, phase="final")
+            if should_save_checkpoint:
+                self._save_training_checkpoint(step, global_tic)
 
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps] or step == max_steps - 1:
@@ -1107,7 +1825,7 @@ class Runner:
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
-        metrics = {"psnr": [], "ssim": [], "lpips": []}
+        metrics = {"psnr": [], "ssim": [], "lpips": [], "l1": [], "ssim_loss": [], "render_loss": []}
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -1157,9 +1875,15 @@ class Runner:
 
                 pixels = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 colors = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                l1_value = torch.mean(torch.abs(colors - pixels))
+                ssim_loss_value = 1.0 - ssim(colors, pixels)
+                render_loss_value = l1_value * (1.0 - cfg.ssim_lambda) + ssim_loss_value * cfg.ssim_lambda
                 metrics["psnr"].append(self.psnr(colors, pixels))
                 metrics["ssim"].append(self.ssim(colors, pixels))
                 metrics["lpips"].append(self.lpips(colors, pixels))
+                metrics["l1"].append(l1_value)
+                metrics["ssim_loss"].append(ssim_loss_value)
+                metrics["render_loss"].append(render_loss_value)
 
                 # # write median depths
                 # render_median = (render_median - render_median.min()) / (render_median.max() - render_median.min())
@@ -1208,19 +1932,26 @@ class Runner:
         if world_rank == 0:
             ellipse_time /= len(valloader)
 
-            psnr = torch.stack(metrics["psnr"]).mean()
-            ssim = torch.stack(metrics["ssim"]).mean()
-            lpips = torch.stack(metrics["lpips"]).mean()
+            val_psnr = torch.stack(metrics["psnr"]).mean()
+            val_ssim = torch.stack(metrics["ssim"]).mean()
+            val_lpips = torch.stack(metrics["lpips"]).mean()
+            val_l1 = torch.stack(metrics["l1"]).mean()
+            val_ssim_loss = torch.stack(metrics["ssim_loss"]).mean()
+            val_render_loss = torch.stack(metrics["render_loss"]).mean()
             print(
-                f"PSNR: {psnr.item():.3f}, SSIM: {ssim.item():.4f}, LPIPS: {lpips.item():.3f} "
+                f"PSNR: {val_psnr.item():.3f}, SSIM: {val_ssim.item():.4f}, LPIPS: {val_lpips.item():.3f}, "
+                f"L1: {val_l1.item():.4f}, render_loss: {val_render_loss.item():.4f} "
                 f"Time: {ellipse_time:.3f}s/image "
                 f"Number of GS: {len(self.splats['means'])}"
             )
             # save stats as json
             stats = {
-                "psnr": psnr.item(),
-                "ssim": ssim.item(),
-                "lpips": lpips.item(),
+                "psnr": val_psnr.item(),
+                "ssim": val_ssim.item(),
+                "lpips": val_lpips.item(),
+                "l1": val_l1.item(),
+                "ssim_loss": val_ssim_loss.item(),
+                "render_loss": val_render_loss.item(),
                 "ellipse_time": ellipse_time,
                 "num_GS": len(self.splats["means"]),
             }

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Segmentation Editor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="toolbar">
+        <div class="brand">
+          <span class="brand-title">Segmentation Editor</span>
+          <span id="projectStatus" class="status">Loading</span>
+        </div>
+        <div class="controls">
+          <div class="toolbar-group" aria-label="Interaction mode">
+            <span class="group-label">Tools</span>
+            <button class="tool-button active" type="button" data-tool="navigate">Navigate</button>
+            <button class="tool-button" type="button" data-tool="click-id">Click ID</button>
+            <button class="tool-button" type="button" data-tool="lasso">Lasso</button>
+            <button class="tool-button" type="button" data-tool="sam2">SAM2 Mask</button>
+          </div>
+
+          <div class="toolbar-group view-group" aria-label="Viewport controls">
+            <span class="group-label">View</span>
+            <button id="resetView" type="button">Reset</button>
+            <label class="control compact">
+              <span>Point</span>
+              <input id="pointSize" type="range" min="1" max="5" step="1" value="2" />
+            </label>
+            <label class="control checkbox">
+              <input id="showFrameImage" type="checkbox" checked />
+              <span>RGB</span>
+            </label>
+            <label class="control checkbox">
+              <input id="rotateFrames" type="checkbox" checked />
+              <span>Portrait</span>
+            </label>
+          </div>
+
+          <div class="toolbar-group save-group" aria-label="Save edits">
+            <button id="saveEdits" type="button" disabled>Save</button>
+            <span id="pendingEditStatus" class="pending-status">Saved</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="viewer-shell">
+        <canvas id="viewer"></canvas>
+        <aside id="idPanel" class="id-panel" aria-label="Segment IDs">
+          <div class="id-panel-header">
+            <span>Segment IDs</span>
+            <span id="idPanelSummary">Loading</span>
+          </div>
+          <div id="idList" class="id-list"></div>
+        </aside>
+        <aside id="editPanel" class="edit-panel" aria-label="Selection and SAM controls">
+          <div class="edit-panel-header">
+            <span>Selection</span>
+            <span id="selectionStatus" class="selection-status">No selection</span>
+          </div>
+          <div class="edit-panel-body">
+            <section class="edit-section">
+              <div class="section-title">Label Edits</div>
+              <button id="clearSelection" type="button" disabled>Clear Selection</button>
+              <label class="target-control">
+                <span>Target ID</span>
+                <input id="targetLabel" type="number" min="1" step="1" inputmode="numeric" />
+              </label>
+              <div class="panel-actions">
+                <button id="assignSelection" type="button" title="Relabel only the selected points to the target ID." disabled>Assign</button>
+                <button id="extractSelection" type="button" title="Relabel only the selected points to a new ID." disabled>Extract New</button>
+                <button id="mergeSelectedIds" type="button" title="Merge whole selected IDs into the target ID." disabled>Merge IDs</button>
+              </div>
+            </section>
+
+            <section class="edit-section">
+              <div class="section-title">SAM2 Mask</div>
+              <div class="panel-actions">
+                <button id="runSam2" type="button" disabled>Run SAM2</button>
+                <button id="clearSam2" type="button" disabled>Clear SAM</button>
+              </div>
+              <p class="panel-note">In SAM2 mode, click positive prompts. Shift/Alt-click adds negative prompts.</p>
+            </section>
+          </div>
+        </aside>
+        <div id="viewerHud" class="viewer-hud">Initializing</div>
+      </main>
+
+      <footer class="filmstrip-shell">
+        <div id="filmstrip" class="filmstrip"></div>
+      </footer>
+    </div>
+    <script src="/static/app.js?v=20260610-localedits2" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "kind": "baseline",
+  "description": "30000-step strongest OMeGa stress test from the omega_stable_mesh warmup. Keeps the StableNormal/MapAnything export fixed, but pushes native mesh subdivision much harder to test recoverable fine geometry.",
+  "extends": "baseline_stronger_from_warmup_30000.json",
+  "args": {
+    "data_dir": "${PACKAGE_ROOT}/omega_stable_mesh/dataset",
+    "result_dir": "${PACKAGE_ROOT}/omega_stable_mesh/model_baseline_strongest_30000",
+    "resume_from_checkpoint": "${PACKAGE_ROOT}/omega_stable_mesh/model_warmup_2999/ckpts/ckpt_2999_rank0.pt",
+    "path_to_mesh": "${PACKAGE_ROOT}/omega_stable_mesh/init_mesh.ply",
+    "refine_stop_iter": 25000,
+    "mesh_split_topk": 0.12,
+    "split_every": 150,
+    "remove_start_iter": 5000,
+    "remove_every": 300,
+    "remove_cd": 0.0005,
+    "mesh_preview_on": true,
+    "mesh_preview_every": 500,
+    "mesh_preview_max_width": 0,
+    "mesh_preview_max_faces": 0,
+    "mesh_preview_contact_sheet_images": 64
+  },
+  "post_train": {
+    "plot_losses": true,
+    "plot_losses_smooth_window": 5
+  }
+}

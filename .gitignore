@@ -133,3 +133,4 @@ wandb
 # custom
 work_dirs
 examples/simple_trainer_2dgs_.py
+tools/cgal_mesh_heal

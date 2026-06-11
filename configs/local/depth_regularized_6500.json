@@ -1,0 +1,26 @@
+{
+  "extends": "baseline_debug_6500.json",
+  "kind": "extension",
+  "description": "6500-step OMeGa-4-Building A/B run with Guide01-weighted rendered-depth regularization enabled.",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_depth_regularized_6500",
+    "building_depth_regularization_on": true,
+    "building_depth_guide_dir": "${PACKAGE_ROOT}/cameras/depth_planarity_promptda_loose_small",
+    "building_depth_regularization_start_iter": 3000,
+    "building_depth_lambda": 0.05,
+    "building_depth_huber_m": 0.05,
+    "building_depth_min_m": 0.05,
+    "building_depth_max_m": 15.0,
+    "building_depth_min_alpha": 0.05,
+    "building_depth_planar_weight": 1.0,
+    "building_depth_detail_weight": 0.25,
+    "building_depth_ridge_weight": 0.0,
+    "building_depth_distance_decay_m": 20.0,
+    "regularization_preview_on": true,
+    "regularization_preview_every": 500,
+    "regularization_preview_max_width": 900,
+    "regularization_preview_contact_sheet_images": 24,
+    "regularization_preview_depth_residual_scale_m": 0.25,
+    "regularization_preview_coplane_residual_vmax_m": 0.05
+  }
+}

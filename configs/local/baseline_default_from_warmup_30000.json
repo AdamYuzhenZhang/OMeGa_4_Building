@@ -1,0 +1,38 @@
+{
+  "kind": "baseline",
+  "description": "30000-step OMeGa baseline resumed from the shared warmup using the README/default mesh refinement settings.",
+  "extends": "baseline_debug_6500.json",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_baseline_30000",
+    "resume_from_checkpoint": "${PACKAGE_ROOT}/omega/model_warmup_2999/ckpts/ckpt_2999_rank0.pt",
+    "max_steps": 30000,
+    "save_steps": [
+      30000
+    ],
+    "eval_steps": [
+      5000,
+      10000,
+      15000,
+      20000,
+      25000,
+      30000
+    ],
+    "mesh_loss_start_iter": 1000,
+    "mono_normal_loss_start_iter": 3000,
+    "dist_loss": false,
+    "dist_start_iter": 3000,
+    "mesh_refine_start_iter": 3000,
+    "refine_stop_iter": 15000,
+    "mesh_split_topk": 0.02,
+    "split_every": 500,
+    "mesh_preview_on": true,
+    "mesh_preview_every": 500,
+    "mesh_preview_max_width": 0,
+    "mesh_preview_max_faces": 0,
+    "mesh_preview_contact_sheet_images": 64
+  },
+  "post_train": {
+    "plot_losses": true,
+    "plot_losses_smooth_window": 5
+  }
+}

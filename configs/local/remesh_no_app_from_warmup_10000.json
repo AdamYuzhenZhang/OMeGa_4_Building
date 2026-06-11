@@ -1,0 +1,31 @@
+{
+  "kind": "extension",
+  "description": "10000-step OMeGa-4-Building branch with in-training structure-aware remeshing and splat reparenting, resumed from the shared no-app-opt warmup.",
+  "extends": "baseline_from_warmup_10000.json",
+  "trainer": "examples/simple_trainer_meshgs_training_remesh.py",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_remesh_no_app_from_warmup_10000",
+    "resume_from_checkpoint": "${PACKAGE_ROOT}/omega/model_warmup_no_app_2999/ckpts/ckpt_2999_rank0.pt",
+    "app_opt": false,
+    "training_remesh_on": true,
+    "training_remesh_start_iter": 4000,
+    "training_remesh_every": 2000,
+    "training_remesh_stop_iter": 9500,
+    "training_remesh_target_faces": 0,
+    "training_remesh_target_ratio": 0.5,
+    "training_remesh_reparent_k": 32,
+    "training_remesh_reparent_chunk_size": 65536,
+    "training_remesh_preview_on": true,
+    "training_remesh_preview_error_vmax_m": 0.05,
+    "training_remesh_preview_error_reference_max_faces": 400000,
+    "training_remesh_topology_cleanup": true,
+    "training_remesh_planar_quadric": true,
+    "training_remesh_planar_weight": 0.0005,
+    "training_remesh_quality_weight": true,
+    "training_remesh_preserve_boundary": true,
+    "training_remesh_boundary_weight": 5.0,
+    "training_remesh_preserve_normal": true,
+    "training_remesh_preserve_topology": true,
+    "training_remesh_crease_angle_deg": 80.0
+  }
+}

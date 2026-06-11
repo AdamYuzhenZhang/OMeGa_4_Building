@@ -1,0 +1,9 @@
+{
+  "kind": "warmup",
+  "description": "Shared no-app-opt OMeGa warmup through global step 2999. This uses SH color parameters instead of the optional appearance embedding path, so downstream no-app-opt runs can resume cleanly.",
+  "extends": "warmup_2999.json",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_warmup_no_app_2999",
+    "app_opt": false
+  }
+}

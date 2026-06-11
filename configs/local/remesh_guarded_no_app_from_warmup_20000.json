@@ -1,0 +1,45 @@
+{
+  "kind": "extension",
+  "description": "20000-step OMeGa-4-Building guarded in-training remesh test. This keeps the same no-app warmup but replaces the strong fixed-ratio schedule with milder repeated remesh events, a scheduled ratio that weakens over time, and a hard face-count floor to avoid late over-simplification.",
+  "extends": "baseline_no_app_from_warmup_20000.json",
+  "trainer": "examples/simple_trainer_meshgs_training_remesh.py",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_remesh_guarded_no_app_from_warmup_20000",
+    "training_remesh_on": true,
+    "training_remesh_start_iter": 7600,
+    "training_remesh_every": 2000,
+    "training_remesh_stop_iter": 13600,
+    "training_remesh_target_faces": 0,
+    "training_remesh_target_ratio": 0.8,
+    "training_remesh_target_ratios": [
+      0.75,
+      0.78,
+      0.82,
+      0.86
+    ],
+    "training_remesh_min_target_faces": 150000,
+    "training_remesh_reparent_k": 64,
+    "training_remesh_reparent_chunk_size": 65536,
+    "training_remesh_max_surface_area_change_fraction": 0.12,
+    "training_remesh_max_edge_p99_growth": 2.5,
+    "training_remesh_preview_on": true,
+    "training_remesh_preview_error_vmax_m": 0.05,
+    "training_remesh_preview_error_reference_max_faces": 400000,
+    "training_remesh_topology_cleanup": true,
+    "training_remesh_planar_quadric": true,
+    "training_remesh_planar_weight": 0.0005,
+    "training_remesh_quality_weight": true,
+    "training_remesh_preserve_boundary": true,
+    "training_remesh_boundary_weight": 5.0,
+    "training_remesh_preserve_normal": true,
+    "training_remesh_preserve_topology": true,
+    "training_remesh_crease_angle_deg": 80.0,
+    "training_remesh_boundary_quality": 1.0,
+    "training_remesh_min_quality": 0.05,
+    "training_remesh_quality_gamma": 1.5
+  },
+  "post_train": {
+    "plot_losses": true,
+    "plot_losses_smooth_window": 5
+  }
+}

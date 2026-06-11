@@ -1,0 +1,11 @@
+{
+  "kind": "warmup",
+  "description": "Shared OMeGa warmup for the StableNormal/MapAnything omega_stable_mesh export.",
+  "extends": "warmup_2999.json",
+  "args": {
+    "data_dir": "${PACKAGE_ROOT}/omega_stable_mesh/dataset",
+    "result_dir": "${PACKAGE_ROOT}/omega_stable_mesh/model_warmup_2999",
+    "path_to_mesh": "${PACKAGE_ROOT}/omega_stable_mesh/init_mesh.ply",
+    "dist_loss": false
+  }
+}

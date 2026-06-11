@@ -1,0 +1,8 @@
+{
+  "extends": "baseline_debug_6500.json",
+  "kind": "extension",
+  "description": "Template for future OMeGa-4-Building extension runs. Keep extension-specific args here once the corresponding code exists.",
+  "args": {
+    "result_dir": "${PACKAGE_ROOT}/omega/model_extension_template"
+  }
+}
