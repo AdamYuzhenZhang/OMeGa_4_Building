@@ -111,3 +111,9 @@ def encode_mask_overlay(mask: np.ndarray) -> str:
     buffer = io.BytesIO()
     Image.fromarray(overlay, mode="RGBA").save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def encode_mask_png(mask: np.ndarray) -> str:
+    buffer = io.BytesIO()
+    Image.fromarray((mask.astype(np.uint8) * 255), mode="L").save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")

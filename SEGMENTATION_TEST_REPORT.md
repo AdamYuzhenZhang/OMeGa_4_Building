@@ -544,4 +544,3 @@ visualizations/omega_segmentation/sai3d_observe/
 visualizations/omega_segmentation/split_splat/
 visualizations/omega_segmentation/gaussian_grouping/
 ```
-

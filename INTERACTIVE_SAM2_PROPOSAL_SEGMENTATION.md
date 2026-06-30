@@ -45,6 +45,9 @@ building-part labels.
   Split&Splat-style tests.
 - The interactive point editor, including frame navigation, SAM2 prompts,
   lasso selection, object list, undo, and explicit save.
+- The editor now opens from the sampled SAI3D input point cloud by default:
+  labels start as `0`, points render white, and user-created IDs are layered on
+  top of this raw geometry instead of starting from SAI3D's automatic labels.
 
 ## Proposed Pipeline
 
@@ -66,7 +69,35 @@ mask candidates so the user can split, merge, delete, or relabel proposals.
 
 ### 2. Keyframe Selection
 
-Start manually, then add automatic suggestions.
+The editor now includes an automatic keyframe suggestion step next to SAM2
+proposal generation. It follows SAM2Object's idea of selecting frames with
+large visual changes, but also uses our known camera poses.
+
+For every frame `i`, it computes:
+
+```text
+image_change_i       = mean |LUV_i - LUV_{i-1}|
+translation_change_i = ||C_i - C_{i-1}||
+rotation_change_i    = angle(R_{i-1}^T R_i)
+```
+
+Each channel is robustly normalized and combined:
+
+```text
+score_i = 0.55 * image_i + 0.25 * translation_i + 0.20 * rotation_i
+```
+
+The detector smooths this score, selects local peaks, always keeps the first
+and last frame, removes keyframes that are too close, and inserts extra
+keyframes when gaps are too large. The result is saved in:
+
+```text
+interactive/keyframes/keyframes.json
+```
+
+The bottom frame strip shows selected keyframes with a red marker and shows the
+continuous score as a small bar. These are inspection priorities for the user,
+not hard segmentation constraints.
 
 Good keyframes should:
 
@@ -169,27 +200,111 @@ consistent than unconstrained SAM2 masks.
 ## Expected Outputs
 
 ```text
-<model_dir>/segmentation/interactive_proposals/<run>/
-  keyframes/
-    frame_<id>_edited_labels.png
-    frame_<id>_edits.jsonl
-  propagation/
-    frame_<id>_label_scores.npz
-    frame_<id>_propagated_labels.png
-  fusion/
-    point_label_scores.npz
-    point_labels.npy
-    labeled_points.ply
-    superpoint_labels.npy
-  view_masks/
-    frame_<id>_projected.png
-    frame_<id>_refined.png
-    frame_<id>_confidence.png
-  summary.json
+<model_dir>/segmentation/baselines/<sai3d-run>/
+  dataset/
+    frame_manifest.jsonl
+    scans/<scene>/points.pts
+      # initial unsegmented point cloud sampled from the OMeGa mesh and used
+      # as SAI3D input; the editor opens from this cloud by default.
+
+  interactive/
+    interactive_labels.npy
+      # saved user-created 3D point labels; never overwrites SAI3D labels.
+    interactive_edits.jsonl
+      # append-only edit log.
+
+    keyframes/
+      keyframes.json
+        # SAM2Object-style image-change keyframes augmented with camera pose
+        # deltas; used to guide user inspection.
+
+    proposals/
+      sam2_auto_<width>/
+        source_summary.json
+        config.json
+        progress.json
+        summary.json
+        frames.jsonl
+        label_maps/
+          000000.npy
+          000000.png
+        overlays/
+          000000.png
+        metadata/
+          000000.json
+
+    keyframe_masks/
+      objects.json
+      edits.jsonl
+      frames/
+        000000/
+          0001.png
+          0001.json
+      overlays/
+        000000.png
+
+    propagation/<future-run>/
+      frame_<id>_label_scores.npz
+      frame_<id>_propagated_labels.png
+
+    fusion/<future-run>/
+      point_label_scores.npz
+      point_labels.npy
+      labeled_points.ply
+      superpoint_labels.npy
+
+    view_masks/<future-run>/
+      frame_<id>_projected.png
+      frame_<id>_refined.png
+      frame_<id>_confidence.png
 ```
 
 The original automatic proposal outputs should stay immutable. User-edited
 outputs should be a separate run folder so we can compare revisions.
+
+Current implementation:
+
+- The editor opens `dataset/scans/<scene>/points.pts` as raw white points.
+- The right pipeline panel displays raw point cloud state, SAM2 proposal
+  controls, frame-local SAM2 prompts, 3D label edits, and save state.
+- The `Generate` button runs SAM2 automatic proposals for every staged frame in
+  a background server thread when no completed run exists.
+- After a completed run exists, `Load` displays it without recomputing SAM2,
+  while `Regenerate` explicitly overwrites the interactive proposal run.
+- The browser polls `progress.json` through `/api/proposals/sam2/status`.
+- The `Overlay` toggle draws transparent proposal masks in the active frame and
+  on the bottom filmstrip thumbnails.
+- The first proposal run folder is `interactive/proposals/sam2_auto_1024/` for
+  the current DSLR 1024-width staged frames.
+- Mask-edit tools now live inside `Edit View Masks`, not in the global top
+  toolbar. `Pick` selects the SAM2 proposal ID under the cursor. `Lasso`
+  converts the drawn canvas polygon back to source-image coordinates and stores
+  that pixel region directly; it does not select existing SAM2 proposal labels.
+  `SAM2` adds optional point prompts for a separate SAM2 preview.
+- `Pick` and `Lasso` share selection modifiers: plain action replaces the
+  current mask/lasso selection, `Shift` adds, and `Option`/`Alt` subtracts.
+  The `+` and `-` buttons can pin add/subtract mode, and holding the keyboard
+  modifiers temporarily highlights the same buttons. The canvas cursor shows a
+  small `+` or `-` badge when add/subtract is active. `Deselect` clears picked
+  proposals and lasso pixel regions together.
+- Internally, proposal editing is now a unified pixel-selection stack. Picked
+  proposal IDs, lasso regions, and SAM2 masks all become add/subtract
+  operations on one frame-image mask. The visible selection preview is the
+  composed mask with one boundary.
+- `Update Proposal` writes directly into the active frame's editable SAM2 label
+  map. The backend chooses the target proposal ID from the current pixel
+  selection: if a selected proposal ID is fully covered, that ID is reused;
+  otherwise the edit creates `max_id + 1`. Unselected pixels keep their old IDs,
+  so splitting a proposal never moves leftovers to background.
+- Proposal updates save immediately because they are frame-local label-map
+  edits. `Cmd/Ctrl+Z` remains for unsaved point-label edits and transient
+  selection state.
+- Proposal updates do not create global object IDs, names, or separate binary
+  proposal masks. The edited frame label maps, overlays, and metadata live
+  under `interactive/proposals/sam2_auto_1024_edited`.
+- Proposal IDs are treated as opaque labels. Merging several full proposals may
+  leave gaps in the ID sequence, and we intentionally do not reindex them during
+  editing.
 
 ## Visualization To Build
 

@@ -10,20 +10,42 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from .keyframes import KeyframeConfig, KeyframeFrame, detect_keyframes, read_keyframes
+from .mask_edits import compose_selection_mask, selected_mask_overlay
 from .paths import EditorPaths, read_jsonl
-from .sam2_session import Sam2Config, Sam2Session, encode_mask_overlay
+from .proposals import ProposalFrame, ProposalManager
+from .sam2_session import Sam2Config, Sam2Session, encode_mask_overlay, encode_mask_png
+from .sam2_video_propagation import PropagationFrame, Sam2VideoPropagationSession
+from .view_evidence import ViewEvidenceFrame, ViewEvidenceManager
 
 
 class EditorState:
-    def __init__(self, paths: EditorPaths, *, max_points: int, seed: int, sam2_config: Sam2Config) -> None:
+    def __init__(
+        self,
+        paths: EditorPaths,
+        *,
+        max_points: int,
+        seed: int,
+        label_source: str,
+        sam2_config: Sam2Config,
+    ) -> None:
         self.paths = paths
         self.max_points = max(int(max_points), 1)
         self.seed = int(seed)
+        self.label_source = str(label_source)
         self.sam2_config = sam2_config
         self.sam2_session = Sam2Session(sam2_config)
+        self.sam2_video_propagation = Sam2VideoPropagationSession(
+            sam2_config,
+            work_root=paths.interactive_dir / "tmp",
+        )
+        self.proposals = ProposalManager(paths, sam2_config)
+        self.view_evidence = ViewEvidenceManager(paths)
         self._manifest_rows: list[dict[str, Any]] | None = None
         self._manifest_by_frame_id: dict[int, dict[str, Any]] | None = None
+        self._points_full: np.ndarray | None = None
         self._labels_full: np.ndarray | None = None
+        self._active_label_source: str | None = None
         self._label_summary: dict[str, Any] | None = None
         self._points_payload: dict[str, Any] | None = None
         self._frames: list[dict[str, Any]] | None = None
@@ -41,6 +63,9 @@ class EditorState:
             "servedPointCount": points["servedPointCount"],
             "labelCount": points["labelCount"],
             "bounds": points["bounds"],
+            "pointsPath": str(self.paths.points_path),
+            "labelSource": self._active_label_source or self.label_source,
+            "sai3dLabelsPath": str(self.paths.point_labels) if self.paths.point_labels is not None else "",
             "interactiveLabelsPath": str(self.paths.interactive_labels),
             "hasInteractiveLabels": self.paths.interactive_labels.exists(),
             "sam2": {
@@ -113,10 +138,408 @@ class EditorState:
         with Image.open(path) as image:
             return np.asarray(image.convert("RGB"))
 
+    def proposal_frames(self) -> list[ProposalFrame]:
+        frames: list[ProposalFrame] = []
+        for frame in self.frames():
+            frame_id = int(frame["id"])
+            frames.append(
+                ProposalFrame(
+                    frame_id=frame_id,
+                    width=int(frame["width"]),
+                    height=int(frame["height"]),
+                    image_name=str(frame["imageName"]),
+                    image_path=self.image_path(frame_id),
+                )
+            )
+        return frames
+
+    def view_evidence_frames(self) -> list[ViewEvidenceFrame]:
+        frames: list[ViewEvidenceFrame] = []
+        for frame in self.frames():
+            frame_id = int(frame["id"])
+            row = self.manifest_row(frame_id)
+            frames.append(
+                ViewEvidenceFrame(
+                    frame_id=frame_id,
+                    source_frame_id=int(row.get("sourceFrameId", row.get("frameID", frame_id))),
+                    scan_id=str(row.get("scanID", "scan_000")),
+                    width=int(frame["width"]),
+                    height=int(frame["height"]),
+                    image_name=str(frame["imageName"]),
+                    image_path=self.image_path(frame_id),
+                    manifest_row=row,
+                )
+            )
+        return frames
+
+    def keyframe_status(self) -> dict[str, Any]:
+        payload = read_keyframes(self.paths.keyframes_summary)
+        if payload is None:
+            return {
+                "ready": False,
+                "running": False,
+                "failed": False,
+                "frameCount": len(self.frames()),
+                "keyframeCount": 0,
+                "keyframeIds": [],
+                "message": "No keyframe analysis found.",
+                "summaryPath": str(self.paths.keyframes_summary),
+            }
+        payload = dict(payload)
+        payload["ready"] = True
+        payload.setdefault("running", False)
+        payload.setdefault("failed", False)
+        payload.setdefault("message", f"{int(payload.get('keyframeCount', 0))} keyframes detected.")
+        payload.setdefault("summaryPath", str(self.paths.keyframes_summary))
+        return payload
+
+    def detect_keyframes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        config = KeyframeConfig.from_payload(payload)
+        frames = self._keyframe_frames()
+        result = detect_keyframes(
+            frames,
+            output_path=self.paths.keyframes_summary,
+            config=config,
+        )
+        result["ready"] = True
+        result["running"] = False
+        result["failed"] = False
+        result["message"] = f"Detected {int(result.get('keyframeCount', 0))} keyframes."
+        result["summaryPath"] = str(self.paths.keyframes_summary)
+        return result
+
+    def _keyframe_frames(self) -> list[KeyframeFrame]:
+        out: list[KeyframeFrame] = []
+        proposal_frames = self.proposal_frames()
+        for frame in self.frames():
+            frame_id = int(frame["id"])
+            row = self.manifest_row(frame_id)
+            proposal_label_path = self._keyframe_proposal_label_path(frame_id, row, proposal_frames)
+            depth_path = self._optional_dataset_path(row.get("depthPath"))
+            depth_stats = row.get("depthStats") if isinstance(row.get("depthStats"), dict) else {}
+            out.append(
+                KeyframeFrame(
+                    frame_id=frame_id,
+                    image_name=str(frame["imageName"]),
+                    image_path=self.image_path(frame_id),
+                    pose_world_from_camera=np.asarray(frame["poseWorldFromCamera"], dtype=np.float64).reshape(4, 4),
+                    width=int(frame["width"]),
+                    height=int(frame["height"]),
+                    proposal_label_path=proposal_label_path,
+                    depth_path=depth_path,
+                    depth_coverage=float(depth_stats.get("coverage", 0.0) or 0.0),
+                    proposal_coverage=float(row.get("inputCoverage", 0.0) or 0.0),
+                    proposal_label_count=int(row.get("inputLabelCount", 0) or 0),
+                )
+            )
+        return out
+
+    def _keyframe_proposal_label_path(
+        self,
+        frame_id: int,
+        row: dict[str, Any],
+        frames: list[ProposalFrame],
+    ) -> Path | None:
+        run_name = self.proposals.default_run_name(frames)
+        for paths in [
+            self.proposals.editable_paths(frames, run_name),
+            self.proposals.run_paths(run_name),
+        ]:
+            for suffix in [".npy", ".png"]:
+                path = paths.label_map_dir / f"{int(frame_id):06d}{suffix}"
+                if path.exists():
+                    return path
+        return self._optional_dataset_path(row.get("maskPath"))
+
+    def _optional_dataset_path(self, value: Any) -> Path | None:
+        if not value:
+            return None
+        path = Path(str(value))
+        if not path.is_absolute():
+            path = self.paths.dataset_dir / path
+        return path if path.exists() else None
+
+    def proposal_status(self) -> dict[str, Any]:
+        frames = self.proposal_frames()
+        status = self.proposals.status(frames)
+        if status.get("ready"):
+            try:
+                edit_paths = self.proposals.ensure_editable_copy(frames)
+                status["editableRunName"] = edit_paths.run_dir.name
+                status["editableRunDir"] = str(edit_paths.run_dir)
+                status["editingRepresentation"] = "single integer label map per frame"
+                if edit_paths.summary.exists():
+                    try:
+                        edit_summary = json.loads(edit_paths.summary.read_text(encoding="utf-8"))
+                    except Exception:
+                        edit_summary = {}
+                    editable_updated = str(edit_summary.get("timestampUtc") or "")
+                    if editable_updated:
+                        status["editableUpdatedUtc"] = editable_updated
+                        status["overlayUpdatedUtc"] = editable_updated
+            except FileNotFoundError:
+                pass
+        return status
+
+    def start_proposal_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.proposals.start(self.proposal_frames(), payload)
+
+    def view_evidence_status(self) -> dict[str, Any]:
+        return self.view_evidence.status(self.view_evidence_frames())
+
+    def start_view_evidence_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.view_evidence.start(self.view_evidence_frames(), payload)
+
+    def view_evidence_image_path(self, frame_id: int, kind: str) -> Path:
+        self.frame(frame_id)
+        return self.view_evidence.image_path(self.view_evidence_frames(), int(frame_id), str(kind))
+
+    def proposal_overlay_path(self, frame_id: int) -> Path:
+        self.frame(frame_id)
+        path = self.proposals.overlay_path(self.proposal_frames(), int(frame_id))
+        if not path.exists():
+            raise FileNotFoundError(f"SAM2 proposal overlay does not exist for frame {frame_id}: {path}")
+        return path
+
+    def proposal_label_map(self, frame_id: int) -> np.ndarray:
+        self.frame(frame_id)
+        path = self.proposals.label_map_path(self.proposal_frames(), int(frame_id))
+        if not path.exists():
+            raise FileNotFoundError(f"SAM2 proposal label map does not exist for frame {frame_id}: {path}")
+        labels = np.load(path)
+        if labels.ndim != 2:
+            raise ValueError(f"Expected 2D proposal label map, got shape {labels.shape}: {path}")
+        return labels
+
+    def proposal_frame_summary(self, frame_id: int) -> dict[str, Any]:
+        self.frame(frame_id)
+        path = self.proposals.metadata_path(self.proposal_frames(), int(frame_id))
+        if not path.exists():
+            raise FileNotFoundError(f"SAM2 proposal metadata does not exist for frame {frame_id}: {path}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def pick_proposal(self, frame_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        labels = self.proposal_label_map(frame_id)
+        x = int(round(float(payload.get("x", -1))))
+        y = int(round(float(payload.get("y", -1))))
+        if x < 0 or x >= labels.shape[1] or y < 0 or y >= labels.shape[0]:
+            return {"frameId": int(frame_id), "labelId": 0, "inside": False}
+        label = int(labels[y, x])
+        details = self._proposal_details(frame_id).get(label, {}) if label > 0 else {}
+        return {
+            "frameId": int(frame_id),
+            "labelId": label,
+            "inside": True,
+            "details": details,
+        }
+
+    def preview_selection(self, frame_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        labels = self.proposal_label_map(frame_id)
+        selected = compose_selection_mask(labels, payload)
+        area = int(np.count_nonzero(selected))
+        return {
+            "frameId": int(frame_id),
+            "areaPixels": area,
+            "coverage": float(area / max(selected.size, 1)),
+            "maskOverlayPng": selected_mask_overlay(selected),
+        }
+
+    def propagate_selection(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source_frame_id = int(payload.get("frameId", -1))
+        self.frame(source_frame_id)
+        labels = self.proposal_label_map(source_frame_id)
+        selected = compose_selection_mask(labels, payload)
+        selected_area = int(np.count_nonzero(selected))
+        if selected_area <= 0:
+            raise ValueError("Propagation source selection is empty.")
+
+        neighbor_count = int(payload.get("neighborCount", 2))
+        neighbor_count = max(1, min(neighbor_count, 8))
+        frames = self.frames()
+        source_index = next((idx for idx, frame in enumerate(frames) if int(frame["id"]) == source_frame_id), -1)
+        if source_index < 0:
+            raise KeyError(source_frame_id)
+
+        start = max(0, source_index - neighbor_count)
+        end = min(len(frames), source_index + neighbor_count + 1)
+        sequence = frames[start:end]
+        propagation_frames = [
+            PropagationFrame(
+                frame_id=int(frame["id"]),
+                image_path=self.image_path(int(frame["id"])),
+                width=int(frame["width"]),
+                height=int(frame["height"]),
+            )
+            for frame in sequence
+        ]
+        rows = self.sam2_video_propagation.propagate(
+            frames=propagation_frames,
+            source_local_index=source_index - start,
+            source_mask=selected,
+            max_neighbors=neighbor_count,
+        )
+        return {
+            "method": "sam2_video_mask_prompt",
+            "frameId": int(source_frame_id),
+            "neighborCount": int(neighbor_count),
+            "sourceAreaPixels": int(selected_area),
+            "sourceCoverage": float(selected_area / max(selected.size, 1)),
+            "frames": rows,
+        }
+
+    def save_proposal_edits(self, payload: dict[str, Any]) -> dict[str, Any]:
+        edits = payload.get("edits", [])
+        if not isinstance(edits, list):
+            raise ValueError("edits must be a list.")
+
+        by_frame: dict[int, list[dict[str, Any]]] = {}
+        for item in edits:
+            if not isinstance(item, dict):
+                continue
+            frame_id = int(item.get("frameId", -1))
+            if frame_id < 0:
+                continue
+            by_frame.setdefault(frame_id, []).append(item)
+
+        saved_frames: list[dict[str, Any]] = []
+        for frame_id, frame_edits in sorted(by_frame.items()):
+            labels = self.proposal_label_map(frame_id)
+            records: list[dict[str, Any]] = []
+            for edit in frame_edits:
+                labels, target_id, selected, info = self._apply_proposal_label_edit(labels, edit)
+                records.append(
+                    {
+                        "targetLabelId": int(target_id),
+                        "areaPixels": int(np.count_nonzero(selected)),
+                        "selectionOpCount": int(len(edit.get("selectionOps", []))) if isinstance(edit.get("selectionOps", []), list) else 0,
+                        "createdNewTarget": bool(info.get("createdNewTarget", False)),
+                        "completeSourceLabelIds": info.get("completeSourceLabelIds", []),
+                        "partialSourceLabelIds": info.get("partialSourceLabelIds", []),
+                    }
+                )
+            saved = self.proposals.save_label_map(self.proposal_frames(), frame_id, labels, edit_records=records)
+            saved_frames.append(
+                {
+                    "frameId": int(frame_id),
+                    "labelCount": int(len(saved.get("labels", []))),
+                    "coverage": float(saved.get("coverage", 0.0)),
+                    "metadata": str(saved.get("metadata", "")),
+                    "editRecords": records,
+                }
+            )
+        return {
+            "saved": True,
+            "frameCount": int(len(saved_frames)),
+            "frames": saved_frames,
+        }
+
+    def _apply_proposal_label_edit(self, labels: np.ndarray, payload: dict[str, Any]) -> tuple[np.ndarray, int, np.ndarray, dict[str, Any]]:
+        selected = compose_selection_mask(labels, payload)
+        if not np.any(selected):
+            raise ValueError("Updated proposal selection is empty.")
+
+        preferred_target_id = int(
+            payload.get("preferredTargetLabelId", payload.get("targetLabelId", payload.get("maskId", 0))) or 0
+        )
+        target_id, info = self._proposal_edit_target_id(labels, selected, preferred_target_id)
+        updated = np.asarray(labels).copy()
+        updated[selected] = np.asarray(target_id, dtype=updated.dtype)
+        return updated, target_id, selected, info
+
+    def _proposal_edit_target_id(self, labels: np.ndarray, selected: np.ndarray, preferred_target_id: int = 0) -> tuple[int, dict[str, Any]]:
+        selected_labels = np.unique(labels[selected])
+        selected_labels = selected_labels[selected_labels > 0].astype(np.int64, copy=False)
+
+        complete_ids: list[int] = []
+        partial_ids: list[int] = []
+        for label in selected_labels.tolist():
+            region = labels == int(label)
+            if np.all(selected[region]):
+                complete_ids.append(int(label))
+            else:
+                partial_ids.append(int(label))
+
+        if preferred_target_id > 0 and preferred_target_id in complete_ids:
+            target_id = int(preferred_target_id)
+            created_new = False
+        elif complete_ids:
+            target_id = int(sorted(complete_ids)[0])
+            created_new = False
+        else:
+            target_id = int(np.max(labels)) + 1
+            created_new = True
+            if target_id > np.iinfo(np.uint16).max:
+                raise ValueError("Cannot allocate a new proposal ID; uint16 label map is full.")
+
+        return target_id, {
+            "createdNewTarget": created_new,
+            "preferredTargetLabelId": int(preferred_target_id),
+            "completeSourceLabelIds": sorted(complete_ids),
+            "partialSourceLabelIds": sorted(partial_ids),
+        }
+
+    def _proposal_details(self, frame_id: int) -> dict[int, dict[str, Any]]:
+        try:
+            summary = self.proposal_frame_summary(frame_id)
+        except FileNotFoundError:
+            return {}
+        details: dict[int, dict[str, Any]] = {}
+        for row in summary.get("labels", []):
+            if not isinstance(row, dict):
+                continue
+            label = int(row.get("labelId", 0) or 0)
+            if label > 0:
+                details[label] = row
+        return details
+
+    def points_full(self) -> np.ndarray:
+        if self._points_full is None:
+            points = np.loadtxt(self.paths.points_path, dtype=np.float32)
+            if points.ndim == 1:
+                points = points.reshape(1, -1)
+            points = points[:, :3].astype(np.float32, copy=False)
+            if points.shape[0] == 0:
+                raise ValueError(f"No points found in {self.paths.points_path}")
+            self._points_full = points
+        return self._points_full
+
     def labels_full(self) -> np.ndarray:
         if self._labels_full is None:
-            label_path = self.paths.interactive_labels if self.paths.interactive_labels.exists() else self.paths.point_labels
-            self._labels_full = np.load(label_path).astype(np.int32, copy=False)
+            point_count = int(self.points_full().shape[0])
+            source = self.label_source
+            if source == "auto":
+                if self.paths.interactive_labels.exists():
+                    source = "saved"
+                elif self.paths.point_labels is not None and self.paths.point_labels.exists():
+                    source = "sai3d"
+                else:
+                    source = "raw"
+
+            label_path: Path | None = None
+            if source == "raw":
+                labels = np.zeros(point_count, dtype=np.int32)
+                self._active_label_source = "raw"
+            elif source == "saved":
+                label_path = self.paths.interactive_labels
+                if not label_path.exists():
+                    raise FileNotFoundError(f"Saved interactive labels do not exist: {label_path}")
+                labels = np.load(label_path).astype(np.int32, copy=False)
+                self._active_label_source = "saved"
+            elif source == "sai3d":
+                label_path = self.paths.point_labels
+                if label_path is None or not label_path.exists():
+                    raise FileNotFoundError(f"SAI3D point labels do not exist: {label_path}")
+                labels = np.load(label_path).astype(np.int32, copy=False)
+                self._active_label_source = "sai3d"
+            else:
+                raise ValueError(f"Unknown label source: {self.label_source}")
+
+            labels = labels.reshape(-1).astype(np.int32, copy=False)
+            if labels.shape[0] < point_count:
+                labels = np.pad(labels, (0, point_count - labels.shape[0]), mode="constant", constant_values=0)
+            elif labels.shape[0] > point_count:
+                labels = labels[:point_count]
+            self._labels_full = labels
         return self._labels_full
 
     def label_summary(self) -> dict[str, Any]:
@@ -141,16 +564,11 @@ class EditorState:
         if self._points_payload is not None:
             return self._points_payload
 
-        points = np.loadtxt(self.paths.points_path, dtype=np.float32)
-        if points.ndim == 1:
-            points = points.reshape(1, -1)
-        points = points[:, :3].astype(np.float32, copy=False)
+        points = self.points_full()
         labels = self.labels_full()
         count = min(points.shape[0], labels.shape[0])
         points = points[:count]
         labels = labels[:count]
-        if count == 0:
-            raise ValueError(f"No points found in {self.paths.points_path}")
 
         if count > self.max_points:
             rng = np.random.default_rng(self.seed)
@@ -246,6 +664,7 @@ class EditorState:
             "promptCount": int(points_xy.shape[0]),
             "positivePromptCount": int(np.count_nonzero(point_labels > 0)),
             "negativePromptCount": int(np.count_nonzero(point_labels == 0)),
+            "maskPng": encode_mask_png(mask),
             "maskOverlayPng": encode_mask_overlay(mask),
         }
 

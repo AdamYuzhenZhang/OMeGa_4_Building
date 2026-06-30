@@ -29,6 +29,7 @@ def create_app(
     baseline_name: str,
     max_points: int,
     seed: int,
+    label_source: str,
     sam2_root: Path,
     sam2_checkpoint: Path | None,
     sam2_config: str,
@@ -45,6 +46,7 @@ def create_app(
         paths,
         max_points=max_points,
         seed=seed,
+        label_source=label_source,
         sam2_config=Sam2Config(
             root=sam2_root,
             checkpoint=checkpoint,
@@ -87,6 +89,39 @@ def create_app(
     def frames() -> Response:
         return _json_response(state.frames())
 
+    @app.get("/api/proposals/sam2/status")
+    def proposal_status() -> Response:
+        return _json_response(state.proposal_status())
+
+    @app.get("/api/view-evidence/status")
+    def view_evidence_status() -> Response:
+        return _json_response(state.view_evidence_status())
+
+    @app.post("/api/view-evidence/run")
+    def view_evidence_run(payload: dict[str, Any] | None = Body(default=None)) -> Response:
+        try:
+            return _json_response(state.start_view_evidence_run(payload or {}))
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/keyframes/status")
+    def keyframe_status() -> Response:
+        return _json_response(state.keyframe_status())
+
+    @app.post("/api/keyframes/detect")
+    def keyframe_detect(payload: dict[str, Any] | None = Body(default=None)) -> Response:
+        try:
+            return _json_response(state.detect_keyframes(payload or {}))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/proposals/sam2/run")
+    def proposal_run(payload: dict[str, Any] | None = Body(default=None)) -> Response:
+        try:
+            return _json_response(state.start_proposal_run(payload or {}))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/api/sam2/predict")
     def sam2_predict(payload: dict[str, Any] = Body(...)) -> Response:
         try:
@@ -99,6 +134,57 @@ def create_app(
         try:
             return _json_response(state.save_interactive_labels(payload))
         except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/proposals/sam2/frame/{frame_id}/overlay")
+    def proposal_overlay(frame_id: int) -> FileResponse:
+        try:
+            path = state.proposal_overlay_path(frame_id)
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(path, media_type="image/png")
+
+    @app.get("/api/view-evidence/frame/{frame_id}/{kind}")
+    def view_evidence_image(frame_id: int, kind: str) -> FileResponse:
+        try:
+            path = state.view_evidence_image_path(frame_id, kind)
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(path, media_type="image/png")
+
+    @app.get("/api/proposals/sam2/frame/{frame_id}/summary")
+    def proposal_frame_summary(frame_id: int) -> Response:
+        try:
+            return _json_response(state.proposal_frame_summary(frame_id))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/proposals/sam2/frame/{frame_id}/pick")
+    def proposal_pick(frame_id: int, payload: dict[str, Any] = Body(...)) -> Response:
+        try:
+            return _json_response(state.pick_proposal(frame_id, payload))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/proposals/sam2/save-edits")
+    def proposal_save_edits(payload: dict[str, Any] = Body(...)) -> Response:
+        try:
+            return _json_response(state.save_proposal_edits(payload))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/proposals/sam2/frame/{frame_id}/selection-preview")
+    def proposal_selection_preview(frame_id: int, payload: dict[str, Any] = Body(...)) -> Response:
+        try:
+            return _json_response(state.preview_selection(frame_id, payload))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/proposals/sam2/propagate-selection")
+    def proposal_propagate_selection(payload: dict[str, Any] = Body(...)) -> Response:
+        try:
+            return _json_response(state.propagate_selection(payload))
+        except (KeyError, FileNotFoundError, ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/frame/{frame_id}/image")
@@ -120,6 +206,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--max-points", type=int, default=180000)
     parser.add_argument("--seed", type=int, default=71)
+    parser.add_argument(
+        "--label-source",
+        choices=("raw", "saved", "sai3d", "auto"),
+        default="raw",
+        help=(
+            "Initial labels to load. raw renders the sampled SAI3D input points as "
+            "unsegmented label 0; saved loads interactive_labels.npy; sai3d loads "
+            "mesh_labels/point_labels.npy; auto tries saved, then sai3d, then raw."
+        ),
+    )
     parser.add_argument("--sam2-root", type=Path, default=THIRD_PARTY_ROOT / "sam2")
     parser.add_argument("--sam2-checkpoint", type=Path, default=None)
     parser.add_argument("--sam2-config", default="configs/sam2.1/sam2.1_hiera_l.yaml")
@@ -136,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         baseline_name=args.baseline_name,
         max_points=int(args.max_points),
         seed=int(args.seed),
+        label_source=str(args.label_source),
         sam2_root=args.sam2_root,
         sam2_checkpoint=args.sam2_checkpoint,
         sam2_config=str(args.sam2_config),

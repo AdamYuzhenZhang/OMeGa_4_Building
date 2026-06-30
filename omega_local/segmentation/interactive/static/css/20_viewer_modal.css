@@ -1,0 +1,192 @@
+/* Main 3D canvas, HUD, cursor badge, and propagation modal. */
+.viewer-shell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #070809;
+}
+
+#viewer {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+#viewer.dragging {
+  cursor: grabbing;
+}
+
+#viewer.selecting {
+  cursor: crosshair;
+}
+
+.viewer-hud {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  max-width: min(720px, calc(100% - 28px));
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(8, 10, 12, 0.78);
+  color: #d7dde3;
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.cursor-badge {
+  position: absolute;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  border-radius: 999px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.42);
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  transform: translate(12px, 12px);
+}
+
+.cursor-badge[hidden] {
+  display: none;
+}
+
+.cursor-badge.add {
+  background: rgba(30, 154, 83, 0.96);
+}
+
+.cursor-badge.subtract {
+  background: rgba(194, 58, 67, 0.96);
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.comparison-modal {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: min(1240px, 94vw);
+  max-height: min(860px, 88vh);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(12, 15, 18, 0.96);
+  box-shadow: 0 22px 72px rgba(0, 0, 0, 0.55);
+}
+
+.comparison-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.comparison-modal-header button {
+  height: 28px;
+  padding: 0 10px;
+}
+
+.comparison-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #aeb8c1;
+  font-size: 12px;
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.comparison-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.comparison-card.source {
+  border-color: rgba(255, 221, 86, 0.45);
+}
+
+.comparison-card-title {
+  overflow: hidden;
+  color: #eef4f8;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-stack {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 3 / 4;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: #090b0d;
+}
+
+.comparison-stack img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.comparison-stack.rotate-cw img {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: calc(100% * var(--source-aspect, 1.5));
+  height: calc(100% / var(--source-aspect, 1.5));
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.comparison-stack .comparison-overlay {
+  mix-blend-mode: screen;
+}
+
+.comparison-stack span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 4px 6px;
+  background: linear-gradient(180deg, rgba(5, 7, 9, 0), rgba(5, 7, 9, 0.86));
+  color: #eef4f8;
+  font-size: 11px;
+  line-height: 14px;
+}

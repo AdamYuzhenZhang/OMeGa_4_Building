@@ -1,0 +1,293 @@
+/* Floating interactive pipeline panel for phases 1-3 and follow-up tests. */
+.edit-panel {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(336px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(12, 15, 18, 0.84);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.edit-panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 11px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f1f5f8;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.edit-panel-body {
+  display: grid;
+  gap: 9px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 9px;
+}
+
+.edit-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.section-title {
+  color: #96a5b1;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.pipeline-step {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.pipeline-step.running {
+  border-color: rgba(124, 199, 255, 0.42);
+  background: rgba(66, 129, 170, 0.13);
+}
+
+.pipeline-step.ready {
+  border-color: rgba(148, 226, 169, 0.36);
+}
+
+.pipeline-step.failed {
+  border-color: rgba(255, 155, 155, 0.38);
+}
+
+.step-head {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.step-index {
+  display: inline-grid;
+  align-items: center;
+  justify-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #dce5ec;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.step-status {
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 1px;
+  color: #9da9b3;
+  font-size: 12px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-toggle {
+  justify-content: flex-start;
+}
+
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.panel-tool-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(17, 21, 25, 0.74);
+}
+
+.panel-tool-row .tool-button {
+  width: 100%;
+  padding: 0 6px;
+}
+
+.operation-row {
+  display: grid;
+  grid-template-columns: auto 32px 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #aeb8c1;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.operation-row > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: #92a0aa;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-button {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dce5ec;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 24px;
+}
+
+.operation-button:hover {
+  background: #252d35;
+}
+
+.operation-button.active.add {
+  border-color: rgba(78, 227, 148, 0.48);
+  background: rgba(40, 122, 76, 0.95);
+  color: #f6fff9;
+}
+
+.operation-button.active.subtract {
+  border-color: rgba(255, 122, 122, 0.5);
+  background: rgba(137, 55, 62, 0.95);
+  color: #fff8f8;
+}
+
+.operation-button.temporary {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.mask-edit-summary {
+  display: grid;
+  gap: 3px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: #b6c2cb;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.mask-edit-summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-box {
+  display: grid;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(124, 199, 255, 0.13);
+  border-radius: 7px;
+  background: rgba(21, 32, 38, 0.55);
+}
+
+.evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: #d6e0e8;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 16px;
+}
+
+.evidence-head .step-status {
+  margin-top: 0;
+  color: #9fb4c2;
+  font-weight: 500;
+}
+
+.evidence-action-list {
+  display: grid;
+  gap: 6px;
+}
+
+.evidence-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.evidence-action-row > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.evidence-action-row span {
+  overflow: hidden;
+  color: #d4dce3;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-action-row small {
+  overflow: hidden;
+  color: #aeb8c1;
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-action-row button {
+  min-width: 84px;
+}
+
+.panel-actions button,
+.edit-section > button,
+.pipeline-step > button {
+  height: 28px;
+  padding: 0 9px;
+}
+
+.panel-note {
+  margin: 0;
+  color: #9da9b3;
+  font-size: 12px;
+  line-height: 16px;
+}

@@ -1,0 +1,133 @@
+/* Bottom camera-frame filmstrip. */
+.filmstrip-shell {
+  min-width: 0;
+  overflow: hidden;
+  border-top: 1px solid #2a3036;
+  background: #15191d;
+}
+
+.filmstrip {
+  display: flex;
+  gap: 8px;
+  height: 100%;
+  padding: 10px 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.frame-tile {
+  position: relative;
+  flex: 0 0 132px;
+  display: block;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid #303841;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0d0f11;
+  color: #dfe5eb;
+  cursor: pointer;
+}
+
+.frame-tile.portrait {
+  flex-basis: 82px;
+}
+
+.frame-tile:hover {
+  border-color: #627282;
+}
+
+.frame-tile.active {
+  border-color: #7cc7ff;
+  box-shadow: inset 0 0 0 1px #7cc7ff;
+}
+
+.frame-tile.keyframe {
+  border-color: #ff6b68;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 107, 104, 0.68),
+    0 0 0 1px rgba(255, 107, 104, 0.18);
+}
+
+.frame-tile.active.keyframe {
+  border-color: #ffb36b;
+  box-shadow:
+    inset 0 0 0 1px #7cc7ff,
+    inset 0 0 0 3px rgba(255, 107, 104, 0.55);
+}
+
+.frame-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-fit: cover;
+  background: #0d0f11;
+}
+
+.frame-tile.portrait img {
+  transform: rotate(90deg) scale(1.45);
+  transform-origin: center;
+}
+
+.frame-tile .proposal-thumb {
+  display: none;
+  opacity: 0.92;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.filmstrip.show-proposals .frame-tile .proposal-thumb {
+  display: block;
+}
+
+.keyframe-marker {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 999px;
+  background: #ff4f4f;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.keyframe-score {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  height: 3px;
+  background: linear-gradient(90deg, #ff5a58, #ffb36b);
+  opacity: 0;
+  transform: scaleX(var(--keyframe-score, 0));
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+.frame-tile.has-keyframe-score .keyframe-score {
+  opacity: 0.9;
+}
+
+.frame-label {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  padding: 4px 6px;
+  background: linear-gradient(180deg, rgba(5, 7, 9, 0), rgba(5, 7, 9, 0.88));
+  color: #eef4f8;
+  font-size: 12px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}

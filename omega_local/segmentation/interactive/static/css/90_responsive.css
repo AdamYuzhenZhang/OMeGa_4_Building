@@ -1,0 +1,35 @@
+/* Compact viewport adjustments. */
+@media (max-width: 760px) {
+  .app {
+    grid-template-rows: auto minmax(0, 1fr) 112px;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .toolbar-group {
+    flex-wrap: wrap;
+  }
+
+  .id-panel {
+    width: min(240px, calc(100% - 28px));
+  }
+
+  .edit-panel {
+    top: auto;
+    right: 14px;
+    bottom: 14px;
+    width: min(260px, calc(100% - 28px));
+    max-height: 48%;
+  }
+}

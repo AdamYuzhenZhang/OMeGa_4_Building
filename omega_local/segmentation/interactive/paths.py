@@ -21,11 +21,13 @@ class EditorPaths:
     baseline_dir: Path
     dataset_dir: Path
     frame_manifest: Path
-    point_labels: Path
+    point_labels: Path | None
     points_path: Path
     interactive_dir: Path
     interactive_labels: Path
     interactive_edits: Path
+    keyframes_dir: Path
+    keyframes_summary: Path
 
 
 def slug_token(value: str) -> str:
@@ -79,21 +81,22 @@ def resolve_paths(model_dir: Path, baseline_name: str) -> EditorPaths:
 
     dataset_dir = baseline_dir / "dataset"
     frame_manifest = dataset_dir / "frame_manifest.jsonl"
-    point_labels = baseline_dir / "mesh_labels" / "point_labels.npy"
+    point_labels_candidate = baseline_dir / "mesh_labels" / "point_labels.npy"
+    point_labels = point_labels_candidate if point_labels_candidate.exists() else None
     scan_dirs = sorted((dataset_dir / "scans").glob("*"))
     points_candidates = [scan_dir / "points.pts" for scan_dir in scan_dirs]
     points_path = next((path for path in points_candidates if path.exists()), Path())
 
     missing = [
         ("frame manifest", frame_manifest),
-        ("point labels", point_labels),
         ("points.pts", points_path),
     ]
     absent = [f"{label}: {path}" for label, path in missing if not path.exists()]
     if absent:
-        raise FileNotFoundError("Interactive editor is missing required SAI3D outputs:\n" + "\n".join(absent))
+        raise FileNotFoundError("Interactive editor is missing required SAI3D input data:\n" + "\n".join(absent))
 
     interactive_dir = baseline_dir / "interactive"
+    keyframes_dir = interactive_dir / "keyframes"
     return EditorPaths(
         model_dir=model_dir,
         baseline_name=baseline_name,
@@ -105,4 +108,6 @@ def resolve_paths(model_dir: Path, baseline_name: str) -> EditorPaths:
         interactive_dir=interactive_dir,
         interactive_labels=interactive_dir / "interactive_labels.npy",
         interactive_edits=interactive_dir / "interactive_edits.jsonl",
+        keyframes_dir=keyframes_dir,
+        keyframes_summary=keyframes_dir / "keyframes.json",
     )
