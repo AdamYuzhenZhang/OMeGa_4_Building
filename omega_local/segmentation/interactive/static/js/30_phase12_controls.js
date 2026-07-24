@@ -8,60 +8,6 @@ function selectedLabels() {
   return labels;
 }
 
-function selectedFullIndices() {
-  const indices = [];
-  for (const index of state.selectedPointIndices) {
-    const sourceIndex = state.sourceIndices.length ? state.sourceIndices[index] : index;
-    if (Number.isInteger(sourceIndex) && sourceIndex >= 0) indices.push(sourceIndex);
-  }
-  return indices;
-}
-
-function majoritySelectedLabel() {
-  const counts = new Map();
-  for (const index of state.selectedPointIndices) {
-    const label = state.labels[index];
-    if (label <= 0) continue;
-    counts.set(label, (counts.get(label) || 0) + 1);
-  }
-  let bestLabel = 0;
-  let bestCount = -1;
-  for (const [label, count] of counts.entries()) {
-    if (count > bestCount || (count === bestCount && label < bestLabel)) {
-      bestLabel = label;
-      bestCount = count;
-    }
-  }
-  return bestLabel;
-}
-
-function nextAvailableLabel() {
-  let maxLabel = 0;
-  if (state.labelSummary && Array.isArray(state.labelSummary.labels)) {
-    for (const item of state.labelSummary.labels) {
-      maxLabel = Math.max(maxLabel, Number(item.label) || 0);
-    }
-  }
-  for (const label of state.labels) {
-    maxLabel = Math.max(maxLabel, label);
-  }
-  return maxLabel + 1;
-}
-
-function targetLabel() {
-  const value = Number(targetLabelInput ? targetLabelInput.value : 0);
-  return Number.isInteger(value) && value > 0 ? value : 0;
-}
-
-function suggestTargetLabel() {
-  if (!targetLabelInput || document.activeElement === targetLabelInput) return;
-  if (targetLabel() > 0) return;
-  const label = majoritySelectedLabel();
-  if (label > 0) {
-    targetLabelInput.value = String(label);
-  }
-}
-
 function applySelection(indices, operation = "replace") {
   const next = operation === "replace" ? new Set() : new Set(state.selectedPointIndices);
   if (operation === "subtract") {
@@ -93,52 +39,9 @@ function syncSelectionControls() {
   if (clearSelectionButton) {
     clearSelectionButton.disabled = state.selectedPointIndices.size === 0;
   }
-  suggestTargetLabel();
-  const selectedLabelCount = selectedLabels().size;
-  const hasSelection = state.selectedPointIndices.size > 0;
-  if (assignSelectionButton) {
-    assignSelectionButton.disabled = state.editBusy || !hasSelection || targetLabel() <= 0;
-  }
-  if (extractSelectionButton) {
-    extractSelectionButton.disabled = state.editBusy || !hasSelection;
-  }
-  if (mergeSelectedIdsButton) {
-    const labels = selectedLabels();
-    const target = targetLabel();
-    const mergesSomething = selectedLabelCount > 1 || (selectedLabelCount === 1 && !labels.has(target));
-    mergeSelectedIdsButton.disabled = state.editBusy || !mergesSomething || target <= 0;
-  }
   const count = state.selectedPointIndices.size;
   setSelectionStatus(count ? `${count.toLocaleString()} selected` : "No selection");
   renderIdPanel();
-  syncSaveControls();
-}
-
-function syncToolButtons() {
-  for (const button of toolButtons) {
-    button.classList.toggle("active", button.dataset.tool === state.tool);
-  }
-  canvas.classList.toggle("selecting", state.tool !== "navigate");
-  syncSelectionOperationControls();
-  syncSamControls();
-}
-
-function setTool(tool) {
-  state.tool = tool;
-  state.lasso = null;
-  syncToolButtons();
-  render();
-}
-
-function syncSamControls() {
-  const proposalRunning = Boolean(state.proposalStatus && state.proposalStatus.running);
-  if (runSam2Button) {
-    runSam2Button.disabled = state.samBusy || proposalRunning || state.samPrompts.length === 0 || !state.selectedFrame;
-    runSam2Button.title = "Run SAM2 with the current positive and negative prompts to create a temporary proposal selection";
-  }
-  if (clearSam2Button) {
-    clearSam2Button.disabled = state.samBusy || state.samPrompts.length === 0;
-  }
 }
 
 function proposalReady() {
@@ -148,7 +51,6 @@ function proposalReady() {
 function proposalOverlayStamp() {
   const stamp = state.proposalStatus
     ? state.proposalStatus.overlayUpdatedUtc ||
-      state.proposalStatus.editableUpdatedUtc ||
       state.proposalStatus.updatedUtc ||
       state.proposalStatus.completedFrameCount ||
       "ready"
@@ -161,11 +63,158 @@ function proposalOverlayUrl(frameId) {
   return `/api/proposals/sam2/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`;
 }
 
+function proposalLayerStatus(layer) {
+  const key = normalizeProposalLayer(layer);
+  const layers = state.proposalLayerStatus && Array.isArray(state.proposalLayerStatus.layers)
+    ? state.proposalLayerStatus.layers
+    : [];
+  return layers.find((item) => normalizeProposalLayer(item.key) === key) || null;
+}
+
+function proposalLayerReady(layer) {
+  const status = proposalLayerStatus(layer);
+  return Boolean(status && status.ready);
+}
+
+function proposalLayerStamp(layer) {
+  const status = proposalLayerStatus(layer);
+  return status
+    ? status.updatedUtc || status.completedFrameCount || proposalOverlayStamp()
+    : proposalOverlayStamp();
+}
+
+function proposalLayerOverlayUrl(frameId, layer) {
+  const key = normalizeProposalLayer(layer);
+  const stamp = proposalLayerStamp(key);
+  return `/api/proposals/layers/${key}/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`;
+}
+
+function visibleProposalLayers() {
+  return proposalLayerPriorityOrder().filter((layer) => (
+    Boolean(state.proposalLayers[layer]) &&
+    proposalLayerReady(layer)
+  ));
+}
+
+function pickProposalLayers() {
+  return visibleProposalLayers();
+}
+
+function proposalLayerInputElements() {
+  return proposalLayerOptionsEl
+    ? [...proposalLayerOptionsEl.querySelectorAll("[data-proposal-layer]")]
+    : [];
+}
+
+function initializeProposalLayerState() {
+  const rows = state.proposalLayerStatus && Array.isArray(state.proposalLayerStatus.layers)
+    ? state.proposalLayerStatus.layers
+    : [];
+  const next = {};
+  for (const row of rows) {
+    const key = normalizeProposalLayer(row.key || "sam2");
+    next[key] = Boolean(state.proposalLayers[key]);
+  }
+  if (!("sam2" in next)) next.sam2 = false;
+  state.proposalLayers = next;
+}
+
+const PROPOSAL_LAYER_GROUPS = [
+  { key: "frame_proposals", label: "Frame Proposals" },
+  { key: "video_propagation", label: "Video Propagation" },
+  { key: "sparse_3d_transfer", label: "Sparse 3D Transfer" },
+  { key: "identity_refinement", label: "Identity Refinement" },
+  { key: "dense_colmap", label: "Dense From COLMAP" },
+  { key: "dense_omega_init", label: "Dense From OMeGa Init" },
+  { key: "dense_omega_final", label: "Dense From OMeGa Final" },
+  { key: "pairwise_transfer", label: "Pairwise Transfer Tests" },
+];
+
+function groupedProposalLayers(rows) {
+  const knownGroups = new Map(PROPOSAL_LAYER_GROUPS.map((group) => [group.key, []]));
+  const otherRows = [];
+  for (const row of rows) {
+    const group = String(row.layerGroup || "");
+    const groupRows = knownGroups.get(group);
+    if (groupRows) groupRows.push(row);
+    else otherRows.push(row);
+  }
+  const groups = PROPOSAL_LAYER_GROUPS
+    .map((group) => ({ ...group, rows: knownGroups.get(group.key) }))
+    .filter((group) => group.rows.length > 0);
+  if (otherRows.length) groups.push({ key: "other", label: "Other Layers", rows: otherRows });
+  return groups;
+}
+
+function proposalLayerControl(row) {
+  const layer = normalizeProposalLayer(row.key || "sam2");
+  const label = document.createElement("label");
+  label.className = "control checkbox";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.dataset.proposalLayer = layer;
+  input.checked = Boolean(state.proposalLayers[layer]);
+  input.disabled = !Boolean(row.ready);
+  label.classList.toggle("disabled", input.disabled);
+  label.title = row.ready
+    ? String(row.description || "")
+    : String(row.availabilityMessage || `${row.label || layer} has not been run.`);
+  const text = document.createElement("span");
+  text.textContent = String(row.label || layer);
+  label.append(input, text);
+  input.addEventListener("change", () => {
+    state.proposalLayers[layer] = input.checked;
+    state.proposalOverlayImages.clear();
+    state.proposalLayerOverlayImages.clear();
+    updateProposalThumbnails();
+    syncProposalControls();
+    if (state.selectedFrame) {
+      loadFrameProposalLayers(state.selectedFrame.id).catch((error) => {
+        console.error(error);
+        setSelectionStatus(error.message);
+      });
+    } else {
+      render();
+    }
+  });
+  return label;
+}
+
+function renderProposalLayerControls() {
+  if (!proposalLayerOptionsEl) return;
+  const rows = state.proposalLayerStatus && Array.isArray(state.proposalLayerStatus.layers)
+    ? state.proposalLayerStatus.layers
+    : [];
+  const visibleCount = rows.filter((row) => (
+    Boolean(state.proposalLayers[normalizeProposalLayer(row.key || "sam2")]) && Boolean(row.ready)
+  )).length;
+  if (proposalLayerSummaryEl) {
+    proposalLayerSummaryEl.textContent = visibleCount === 1
+      ? "1 visible"
+      : `${visibleCount.toLocaleString()} visible`;
+  }
+  proposalLayerOptionsEl.textContent = "";
+  for (const group of groupedProposalLayers(rows)) {
+    const section = document.createElement("section");
+    section.className = "proposal-layer-group";
+    section.dataset.layerGroup = group.key;
+    const title = document.createElement("div");
+    title.className = "proposal-layer-group-title";
+    title.textContent = group.label;
+    const options = document.createElement("div");
+    options.className = "proposal-layer-group-options";
+    for (const row of group.rows) options.appendChild(proposalLayerControl(row));
+    section.append(title, options);
+    proposalLayerOptionsEl.appendChild(section);
+  }
+}
+
 function viewEvidenceReady() {
   const status = state.viewEvidenceStatus || {};
   return Boolean(
     (evidenceKindStatus("normal").generatedFrameCount || 0) > 0 ||
-    (evidenceKindStatus("depth").generatedFrameCount || 0) > 0
+    (evidenceKindStatus("depth").generatedFrameCount || 0) > 0 ||
+    (evidenceKindStatus("dinov3").generatedFrameCount || 0) > 0
   );
 }
 
@@ -175,9 +224,13 @@ function viewEvidenceTotalFrames() {
 
 function evidenceKindStatus(kind) {
   const status = state.viewEvidenceStatus || {};
-  const key = kind === "depth" ? "depthStatus" : "normalStatus";
+  const key = kind === "depth" ? "depthStatus" : kind === "dinov3" ? "dinoStatus" : "normalStatus";
   const nested = status[key] && typeof status[key] === "object" ? status[key] : {};
-  const topCount = kind === "depth" ? Number(status.depthFrameCount) || 0 : Number(status.normalFrameCount) || 0;
+  const topCount = kind === "depth"
+    ? Number(status.depthFrameCount) || 0
+    : kind === "dinov3"
+      ? Number(status.dinoFrameCount) || 0
+      : Number(status.normalFrameCount) || 0;
   const total = Number(nested.frameCount) || Number(status.frameCount) || state.frames.length || 0;
   return {
     target: kind,
@@ -187,6 +240,7 @@ function evidenceKindStatus(kind) {
     frameCount: total,
     completedFrameCount: Number(nested.completedFrameCount) || 0,
     generatedFrameCount: Number(nested.generatedFrameCount) || topCount,
+    featureFrameCount: Number(nested.featureFrameCount) || 0,
     currentFrameId: nested.currentFrameId,
     message: typeof nested.message === "string" ? nested.message : "",
     updatedUtc: nested.updatedUtc || "",
@@ -201,6 +255,10 @@ function depthEvidenceCount() {
   return evidenceKindStatus("depth").generatedFrameCount || 0;
 }
 
+function dinoEvidenceCount() {
+  return evidenceKindStatus("dinov3").generatedFrameCount || 0;
+}
+
 function normalEvidenceComplete() {
   return Boolean(evidenceKindStatus("normal").ready);
 }
@@ -209,11 +267,21 @@ function depthEvidenceComplete() {
   return Boolean(evidenceKindStatus("depth").ready);
 }
 
+function evidenceButtonLabel(kind) {
+  const status = evidenceKindStatus(kind);
+  if (status.running) return "Generating";
+  if (status.failed) return "Retry";
+  if (status.ready) return "Regenerate";
+  if ((status.generatedFrameCount || 0) > 0) return "Resume";
+  return "Generate";
+}
+
 function viewEvidenceModeReady(mode) {
   const value = String(mode || "rgb");
   if (value === "rgb") return true;
   if (value.startsWith("normal")) return normalEvidenceCount() > 0;
   if (value.startsWith("depth")) return depthEvidenceCount() > 0;
+  if (value === "dinov3") return dinoEvidenceCount() > 0;
   return false;
 }
 
@@ -221,9 +289,11 @@ function viewEvidenceStamp() {
   const status = state.viewEvidenceStatus || {};
   const normalStatus = evidenceKindStatus("normal");
   const depthStatus = evidenceKindStatus("depth");
+  const dinoStatus = evidenceKindStatus("dinov3");
   return [
     normalStatus.updatedUtc,
     depthStatus.updatedUtc,
+    dinoStatus.updatedUtc,
     status.updatedUtc,
     status.timestampUtc,
     status.completedFrameCount,
@@ -271,10 +341,7 @@ function updateKeyframeThumbnails() {
   for (const tile of filmstrip.querySelectorAll(".frame-tile")) {
     const frameId = Number(tile.dataset.frameId);
     const row = rows.get(frameId);
-    const score = row ? clamp(Number(row.combinedScore) || 0, 0, 1) : 0;
     tile.classList.toggle("keyframe", Boolean(row && row.isKeyframe));
-    tile.classList.toggle("has-keyframe-score", ready && Boolean(row));
-    tile.style.setProperty("--keyframe-score", score.toFixed(4));
     tile.title = formatKeyframeTileTitle(tile.dataset.baseTitle || tile.title || "", row);
     const marker = tile.querySelector(".keyframe-marker");
     if (marker) {
@@ -292,6 +359,7 @@ function syncKeyframeControls() {
   if (detectKeyframesButton) detectKeyframesButton.disabled = state.keyframeBusy;
   if (reloadKeyframesButton) reloadKeyframesButton.disabled = state.keyframeBusy;
   updateKeyframeThumbnails();
+  if (typeof updateRegionCompletionThumbnails === "function") updateRegionCompletionThumbnails();
 }
 
 function proposalProgressText(status) {
@@ -305,16 +373,23 @@ function proposalProgressText(status) {
 }
 
 function updateProposalThumbnails() {
-  const ready = proposalReady();
-  filmstrip.classList.toggle("show-proposals", state.showProposals && ready);
+  const visible = visibleProposalLayers();
+  const ready = visible.length > 0;
+  filmstrip.classList.toggle("show-proposals", ready);
   for (const tile of filmstrip.querySelectorAll(".frame-tile")) {
     const overlay = tile.querySelector(".proposal-thumb");
     if (!overlay) continue;
     const frameId = Number(tile.dataset.frameId);
-    const stamp = proposalOverlayStamp();
-    const loadedFor = `${frameId}:${stamp}`;
+    const layer = visible[0] || "";
+    if (!layer) {
+      overlay.removeAttribute("src");
+      overlay.dataset.loadedFor = "";
+      continue;
+    }
+    const stamp = proposalLayerStamp(layer);
+    const loadedFor = `${frameId}:${layer}:${stamp}`;
     if (ready && overlay.dataset.loadedFor !== loadedFor) {
-      overlay.src = proposalOverlayUrl(frameId);
+      overlay.src = proposalLayerOverlayUrl(frameId, layer);
       overlay.dataset.loadedFor = loadedFor;
     }
   }
@@ -336,9 +411,12 @@ function syncProposalControls() {
   if (regenerateProposalsButton) {
     regenerateProposalsButton.disabled = Boolean(state.samBusy || (status && status.running) || !proposalReady());
   }
-  if (showProposalsInput) {
-    showProposalsInput.disabled = !proposalReady();
-    showProposalsInput.checked = state.showProposals && proposalReady();
+  renderProposalLayerControls();
+  for (const input of proposalLayerInputElements()) {
+    const layer = normalizeProposalLayer(input.dataset.proposalLayer || "sam2");
+    input.checked = Boolean(state.proposalLayers[layer]);
+    input.disabled = !proposalLayerReady(layer);
+    input.closest("label")?.classList.toggle("disabled", input.disabled);
   }
   const group = runProposalsButton ? runProposalsButton.closest(".proposal-group") : null;
   if (group) {
@@ -355,18 +433,39 @@ function viewEvidenceProgressText(status) {
   const total = Number(status.frameCount) || state.frames.length;
   const normalStatus = evidenceKindStatus("normal");
   const depthStatus = evidenceKindStatus("depth");
+  const dinoStatus = evidenceKindStatus("dinov3");
   if (normalStatus.running) return `StableNormal: ${normalStatus.completedFrameCount.toLocaleString()} / ${total.toLocaleString()}`;
   if (depthStatus.running) return `Depth: ${depthStatus.completedFrameCount.toLocaleString()} / ${total.toLocaleString()}`;
+  if (dinoStatus.running) return `DINOv3: ${dinoStatus.featureFrameCount.toLocaleString()} / ${total.toLocaleString()}`;
   const normalText = normalStatus.failed
     ? "N failed"
     : `N ${normalStatus.generatedFrameCount.toLocaleString()}/${total.toLocaleString()}`;
   const depthText = depthStatus.failed
     ? "D failed"
     : `D ${depthStatus.generatedFrameCount.toLocaleString()}/${total.toLocaleString()}`;
-  if (status.ready || normalStatus.generatedFrameCount || depthStatus.generatedFrameCount || normalStatus.failed || depthStatus.failed) {
-    return `${normalText} | ${depthText}`;
+  const dinoText = dinoStatus.failed
+    ? "DINO failed"
+    : `DINO ${dinoStatus.generatedFrameCount.toLocaleString()}/${total.toLocaleString()}`;
+  if (status.ready || normalStatus.generatedFrameCount || depthStatus.generatedFrameCount || dinoStatus.generatedFrameCount || dinoStatus.featureFrameCount || normalStatus.failed || depthStatus.failed) {
+    return `${normalText} | ${depthText} | ${dinoText}`;
   }
   return "Not generated";
+}
+
+function viewEvidenceSettingsPayload(target, overwrite) {
+  return {
+    target,
+    overwrite,
+    stableNormalDataType: stableNormalDataTypeInput ? stableNormalDataTypeInput.value : "outdoor",
+    stableNormalVariant: stableNormalVariantInput ? stableNormalVariantInput.value : "stable",
+    stableNormalProcessingResolution: 1536,
+    stableNormalNumInferenceSteps: 10,
+    stableNormalEnsembleSize: 1,
+    stableNormalBatchSize: 1,
+    depthAnythingModel: depthAnythingModelInput
+      ? depthAnythingModelInput.value
+      : "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf",
+  };
 }
 
 function syncViewEvidenceControls() {
@@ -375,13 +474,16 @@ function syncViewEvidenceControls() {
   const total = viewEvidenceTotalFrames();
   const normalStatus = evidenceKindStatus("normal");
   const depthStatus = evidenceKindStatus("depth");
+  const dinoStatus = evidenceKindStatus("dinov3");
   const normalCount = normalStatus.generatedFrameCount || 0;
   const depthCount = depthStatus.generatedFrameCount || 0;
+  const dinoCount = dinoStatus.generatedFrameCount || 0;
   if (viewEvidenceStatusEl) {
     viewEvidenceStatusEl.textContent = viewEvidenceProgressText(status);
     viewEvidenceStatusEl.title = [
       normalStatus.message ? `StableNormal: ${normalStatus.message}` : "",
       depthStatus.message ? `Depth: ${depthStatus.message}` : "",
+      dinoStatus.message ? `DINOv3: ${dinoStatus.message}` : "",
     ].filter(Boolean).join("\n") || (status && status.message ? status.message : "");
   }
   if (normalEvidenceStatusEl) {
@@ -404,32 +506,40 @@ function syncViewEvidenceControls() {
       : "Not generated";
     depthEvidenceStatusEl.title = depthStatus.message || "";
   }
+  if (dinoEvidenceStatusEl) {
+    dinoEvidenceStatusEl.textContent = dinoStatus.running
+      ? `${dinoStatus.featureFrameCount.toLocaleString()} / ${total.toLocaleString()} features`
+      : dinoCount > 0
+        ? `${dinoCount.toLocaleString()} / ${total.toLocaleString()} frames`
+        : dinoStatus.featureFrameCount > 0
+          ? `${dinoStatus.featureFrameCount.toLocaleString()} features`
+          : "Not generated";
+    dinoEvidenceStatusEl.title = dinoStatus.message || "";
+  }
   if (generateNormalEvidenceButton) {
-    const isNormalJob = normalStatus.running;
     generateNormalEvidenceButton.disabled = running;
-    generateNormalEvidenceButton.textContent = isNormalJob
-      ? "Generating"
-      : normalStatus.failed
-        ? "Retry"
-        : normalEvidenceComplete()
-        ? "Regenerate"
-        : "Generate";
-    generateNormalEvidenceButton.title = normalStatus.message || "";
+    generateNormalEvidenceButton.textContent = evidenceButtonLabel("normal");
+    generateNormalEvidenceButton.title = normalStatus.message || "Generate missing StableNormal frames without clearing existing results.";
   }
   if (generateDepthEvidenceButton) {
-    const isDepthJob = depthStatus.running;
     generateDepthEvidenceButton.disabled = running;
-    generateDepthEvidenceButton.textContent = isDepthJob
-      ? "Generating"
-      : depthStatus.failed
-        ? "Retry"
-        : depthEvidenceComplete()
-        ? "Regenerate"
-        : "Generate";
-    generateDepthEvidenceButton.title = depthStatus.message || "";
+    generateDepthEvidenceButton.textContent = evidenceButtonLabel("depth");
+    generateDepthEvidenceButton.title = depthStatus.message || "Generate missing Depth Anything frames without clearing existing results.";
+  }
+  if (generateDinoEvidenceButton) {
+    generateDinoEvidenceButton.disabled = running || Boolean(state.propagationBusy);
+    generateDinoEvidenceButton.textContent = evidenceButtonLabel("dinov3");
+    generateDinoEvidenceButton.title = dinoStatus.message || "Generate the V2-SAM-compatible DINOv3 feature cache.";
   }
   if (frameBackgroundModeInput) {
     frameBackgroundModeInput.disabled = false;
+  }
+  for (const input of [
+    stableNormalDataTypeInput,
+    stableNormalVariantInput,
+    depthAnythingModelInput,
+  ]) {
+    if (input) input.disabled = running;
   }
 }
 
@@ -468,22 +578,24 @@ function startViewEvidencePolling() {
 
 async function runViewEvidenceTarget(target) {
   if (state.viewEvidenceStatus && state.viewEvidenceStatus.running) return;
-  const targetName = target === "depth" ? "Depth Anything V2" : "StableNormal";
+  const targetName = target === "depth"
+    ? "Depth Anything V2"
+    : target === "dinov3"
+      ? "DINOv3"
+      : "StableNormal";
   const statusForTarget = evidenceKindStatus(target);
-  const overwrite = target === "depth" ? depthEvidenceComplete() : normalEvidenceComplete();
-  if (viewEvidenceStatusEl) viewEvidenceStatusEl.textContent = overwrite ? `Regenerating ${targetName}` : `Generating ${targetName}`;
+  const overwrite = Boolean(statusForTarget.ready);
+  const verb = overwrite ? "Regenerating" : ((statusForTarget.generatedFrameCount || 0) > 0 ? "Resuming" : "Generating");
+  if (viewEvidenceStatusEl) viewEvidenceStatusEl.textContent = `${verb} ${targetName}`;
   try {
-    state.viewEvidenceStatus = await postJson("/api/view-evidence/run", {
-      target,
-      overwrite,
-    });
+    state.viewEvidenceStatus = await postJson("/api/view-evidence/run", viewEvidenceSettingsPayload(target, overwrite));
     syncViewEvidenceControls();
     if (state.viewEvidenceStatus && state.viewEvidenceStatus.running) {
       startViewEvidencePolling();
     }
   } catch (error) {
     console.error(error);
-    const key = target === "depth" ? "depthStatus" : "normalStatus";
+    const key = target === "depth" ? "depthStatus" : target === "dinov3" ? "dinoStatus" : "normalStatus";
     state.viewEvidenceStatus = {
       ...(state.viewEvidenceStatus || {}),
       ready: false,

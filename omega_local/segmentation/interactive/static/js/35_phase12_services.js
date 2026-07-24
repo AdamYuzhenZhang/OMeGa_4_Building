@@ -1,7 +1,12 @@
 // Phase 1/2 service calls: keyframe detection and SAM2 proposal generation/loading.
 async function refreshProposalStatus() {
   try {
-    state.proposalStatus = await loadJson("/api/proposals/sam2/status");
+    const [proposalStatus, layerStatus] = await Promise.all([
+      loadJson("/api/proposals/sam2/status"),
+      loadJson("/api/proposals/layers/status"),
+    ]);
+    state.proposalStatus = proposalStatus;
+    state.proposalLayerStatus = layerStatus;
   } catch (error) {
     console.error(error);
     state.proposalStatus = {
@@ -10,7 +15,9 @@ async function refreshProposalStatus() {
       failed: true,
       message: error.message,
     };
+    state.proposalLayerStatus = null;
   }
+  initializeProposalLayerState();
   syncProposalControls();
   if (state.proposalStatus && state.proposalStatus.running) {
     startProposalPolling();
@@ -64,7 +71,7 @@ function startProposalPolling() {
     if (!state.proposalStatus || !state.proposalStatus.running) {
       window.clearInterval(state.proposalPollTimer);
       state.proposalPollTimer = null;
-      if (proposalReady() && state.showProposals && state.selectedFrame) {
+      if (proposalReady() && state.selectedFrame) {
         loadActiveProposalOverlay(state.selectedFrame.id);
         loadProposalFrameInfo(state.selectedFrame.id);
       }
@@ -77,9 +84,9 @@ async function startProposalRun(overwrite = false) {
   try {
     state.proposalStatus = await postJson("/api/proposals/sam2/run", { overwrite });
     if (overwrite) {
-      state.showProposals = false;
       state.proposalOverlayImage = null;
       state.proposalOverlayImages.clear();
+      state.proposalLayerOverlayImages.clear();
     }
     syncProposalControls();
     startProposalPolling();
@@ -97,7 +104,6 @@ async function runAllProposals() {
 
 function loadExistingProposals() {
   if (!proposalReady()) return;
-  state.showProposals = true;
   syncProposalControls();
   if (state.selectedFrame) {
     loadFrameProposalLayers(state.selectedFrame.id).catch((error) => {
@@ -118,30 +124,37 @@ function regenerateProposals() {
 }
 
 async function loadActiveProposalOverlay(frameId) {
-  if (!proposalReady() || !state.showProposals) {
+  const layers = visibleProposalLayers();
+  if (!layers.length) {
     state.proposalOverlayImage = null;
+    state.proposalLayerOverlayImage = new Map();
     render();
     return;
   }
-  const key = `${frameId}:${proposalOverlayStamp()}:full`;
-  let image = state.proposalOverlayImages.get(key);
-  if (!image) {
-    try {
-      image = await loadImage(proposalOverlayUrl(frameId));
-      state.proposalOverlayImages.set(key, image);
-    } catch (error) {
-      console.error(error);
-      return;
+  const images = new Map();
+  for (const layer of layers) {
+    const key = `${frameId}:${layer}:${proposalLayerStamp(layer)}`;
+    let image = state.proposalLayerOverlayImages.get(key);
+    if (!image) {
+      try {
+        image = await loadImage(proposalLayerOverlayUrl(frameId, layer));
+        state.proposalLayerOverlayImages.set(key, image);
+      } catch (error) {
+        console.error(error);
+        continue;
+      }
     }
+    images.set(layer, image);
   }
   if (state.selectedFrame && state.selectedFrame.id === frameId) {
-    state.proposalOverlayImage = image;
+    state.proposalLayerOverlayImage = images;
+    state.proposalOverlayImage = images.get(layers[0]) || null;
     render();
   }
 }
 
 async function loadProposalFrameInfo(frameId) {
-  if (!proposalReady()) {
+  if (!visibleProposalLayers().length) {
     state.proposalFrameInfo = null;
     return;
   }

@@ -21,6 +21,12 @@ import numpy as np
 from PIL import Image
 
 from .paths import EditorPaths, require_dir, require_file
+from .propagation_backends import (
+    is_propagation_layer,
+    normalize_method_id,
+    propagation_layer_key,
+    propagation_method_id,
+)
 from .sam2_session import Sam2Config
 
 
@@ -43,6 +49,7 @@ class ProposalRunPaths:
     progress: Path
     frame_index: Path
     config: Path
+    input_manifest: Path
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,41 @@ class ProposalManager:
 
     def run_paths(self, run_name: str) -> ProposalRunPaths:
         run_dir = self.paths.interactive_dir / "proposals" / _slug_token(run_name)
+        return self._paths_for_dir(run_dir)
+
+    def propagation_root(self) -> Path:
+        return self.paths.interactive_dir / "proposals" / "propagation"
+
+    def propagation_paths(self, method_id: str) -> ProposalRunPaths:
+        run_dir = self.propagation_root() / normalize_method_id(method_id)
+        return self._paths_for_dir(run_dir)
+
+    def save_propagation_registry(self, payload: dict[str, Any]) -> Path:
+        path = self.propagation_root() / "registry.json"
+        _write_json(path, payload)
+        return path
+
+    def reconcile_interrupted_propagation_runs(self, registry: dict[str, Any]) -> None:
+        for row in registry.get("methods", []):
+            method_id = str(row.get("methodId") or "").strip()
+            if not method_id:
+                continue
+            progress_path = self.propagation_paths(method_id).progress
+            if not progress_path.is_file():
+                continue
+            try:
+                payload = json.loads(progress_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if payload.get("status") != "running":
+                continue
+            payload["status"] = "interrupted"
+            payload["message"] = "Previous run was interrupted; run this method again."
+            payload["updatedUtc"] = _now()
+            _write_json(progress_path, payload)
+
+    @staticmethod
+    def _paths_for_dir(run_dir: Path) -> ProposalRunPaths:
         return ProposalRunPaths(
             run_dir=run_dir,
             label_map_dir=run_dir / "label_maps",
@@ -103,53 +145,43 @@ class ProposalManager:
             progress=run_dir / "progress.json",
             frame_index=run_dir / "frames.jsonl",
             config=run_dir / "config.json",
+            input_manifest=run_dir / "input.json",
         )
 
-    def editable_run_name(self, frames: list[ProposalFrame], run_name: str | None = None) -> str:
-        base = _slug_token(run_name or self.default_run_name(frames))
-        return f"{base}_edited"
+    def clear_propagation_output(self, method_id: str) -> None:
+        paths = self.propagation_paths(method_id)
+        if paths.run_dir.exists():
+            shutil.rmtree(paths.run_dir)
 
-    def editable_paths(self, frames: list[ProposalFrame], run_name: str | None = None) -> ProposalRunPaths:
-        return self.run_paths(self.editable_run_name(frames, run_name))
+    def save_propagation_config(
+        self,
+        method_id: str,
+        *,
+        config: dict[str, Any],
+        run_input: dict[str, Any],
+    ) -> ProposalRunPaths:
+        paths = self.propagation_paths(method_id)
+        paths.run_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(paths.config, config)
+        _write_json(paths.input_manifest, run_input)
+        return paths
 
-    def ensure_editable_copy(self, frames: list[ProposalFrame], run_name: str | None = None) -> ProposalRunPaths:
-        raw_name = _slug_token(run_name or self.default_run_name(frames))
-        raw_paths = self.run_paths(raw_name)
-        if not raw_paths.summary.exists():
-            raise FileNotFoundError(f"Raw SAM2 proposal run does not exist: {raw_paths.summary}")
+    def save_propagation_progress(self, method_id: str, payload: dict[str, Any]) -> Path:
+        paths = self.propagation_paths(method_id)
+        paths.run_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(paths.progress, payload)
+        return paths.progress
 
-        edit_paths = self.editable_paths(frames, raw_name)
-        if edit_paths.summary.exists():
-            _repair_editable_metadata(edit_paths, frames)
-            return edit_paths
+    def propagation_frame_summaries(self, method_id: str) -> list[dict[str, Any]]:
+        return _metadata_summaries(self.propagation_paths(method_id).metadata_dir)
 
-        for directory in [edit_paths.label_map_dir, edit_paths.overlay_dir, edit_paths.metadata_dir]:
-            directory.mkdir(parents=True, exist_ok=True)
-        _copy_existing(raw_paths.config, edit_paths.config)
-        _copy_existing(raw_paths.progress, edit_paths.progress)
-        _copy_existing(raw_paths.frame_index, edit_paths.frame_index)
-        _copy_tree_files(raw_paths.label_map_dir, edit_paths.label_map_dir)
-        _copy_tree_files(raw_paths.overlay_dir, edit_paths.overlay_dir)
-        _copy_tree_files(raw_paths.metadata_dir, edit_paths.metadata_dir)
-
-        raw_summary = json.loads(raw_paths.summary.read_text(encoding="utf-8"))
-        raw_summary["stage"] = "interactive_sam2_edited_proposals"
-        raw_summary["method"] = "Editable copy of SAM2 per-frame proposal label maps."
-        raw_summary["rawRunName"] = raw_name
-        raw_summary["rawRunDir"] = str(raw_paths.run_dir)
-        raw_summary["runName"] = edit_paths.run_dir.name
-        raw_summary["runDir"] = str(edit_paths.run_dir)
-        raw_summary["timestampUtc"] = _now()
-        raw_summary["outputs"] = {
-            "labelMapDir": str(edit_paths.label_map_dir),
-            "overlayDir": str(edit_paths.overlay_dir),
-            "metadataDir": str(edit_paths.metadata_dir),
-            "frameIndex": str(edit_paths.frame_index),
-        }
-        _write_json(edit_paths.summary, raw_summary)
-        _write_json(edit_paths.run_dir / "source_raw_run.json", {"rawRunName": raw_name, "rawRunDir": str(raw_paths.run_dir)})
-        _repair_editable_metadata(edit_paths, frames)
-        return edit_paths
+    def layer_paths(self, frames: list[ProposalFrame], layer: str, run_name: str | None = None) -> ProposalRunPaths:
+        layer_key = normalize_proposal_layer(layer)
+        if layer_key == "sam2":
+            return self.run_paths(_slug_token(run_name or self.default_run_name(frames)))
+        if is_propagation_layer(layer_key):
+            return self.propagation_paths(propagation_method_id(layer_key))
+        raise ValueError(f"Unhandled proposal layer '{layer_key}'.")
 
     def status(self, frames: list[ProposalFrame], run_name: str | None = None) -> dict[str, Any]:
         run_name = _slug_token(run_name or self.default_run_name(frames))
@@ -163,6 +195,15 @@ class ProposalManager:
                 payload = json.loads(paths.progress.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 payload = {}
+            if payload.get("running"):
+                payload["ready"] = bool(
+                    paths.summary.is_file()
+                    and _count_complete_frames(paths, frames) == len(frames)
+                )
+                payload["running"] = False
+                payload["failed"] = False
+                payload["message"] = "Previous SAM2 run was interrupted; generate again to finish missing frames."
+                _write_json(paths.progress, payload)
         elif paths.summary.exists():
             payload = {
                 "runName": run_name,
@@ -171,7 +212,7 @@ class ProposalManager:
                 "running": False,
                 "failed": False,
                 "frameCount": len(frames),
-                "completedFrameCount": _count_existing_overlays(paths, frames),
+                "completedFrameCount": _count_complete_frames(paths, frames),
                 "message": "SAM2 proposals ready.",
             }
         else:
@@ -191,10 +232,154 @@ class ProposalManager:
         payload.setdefault("running", False)
         payload.setdefault("failed", False)
         payload.setdefault("frameCount", len(frames))
-        payload.setdefault("completedFrameCount", _count_existing_overlays(paths, frames))
+        payload.setdefault("completedFrameCount", _count_complete_frames(paths, frames))
         payload.setdefault("overlayUrlTemplate", "/api/proposals/sam2/frame/{frameId}/overlay")
         payload.setdefault("summaryPath", str(paths.summary))
         return payload
+
+    def layer_status(
+        self,
+        frames: list[ProposalFrame],
+        propagation_registry: dict[str, Any],
+        run_name: str | None = None,
+    ) -> dict[str, Any]:
+        raw_name = _slug_token(run_name or self.default_run_name(frames))
+        raw_status = self.status(frames, raw_name)
+        method_rows = [
+            dict(row)
+            for row in propagation_registry.get("methods", [])
+            if isinstance(row, dict)
+        ]
+        layer_specs = [
+            {
+                "key": "sam2",
+                "label": "SAM2 Automatic",
+                "description": "Original frame-local SAM2 anything proposals.",
+                "kind": "automatic",
+                "labelSpace": "local_proposal",
+                "layerGroup": "frame_proposals",
+                "methodId": None,
+                "available": True,
+                "availabilityMessage": "Ready",
+            }
+        ]
+        for method in method_rows:
+            layer_specs.append(
+                {
+                    "key": str(method.get("layerKey") or propagation_layer_key(str(method.get("methodId", "")))),
+                    "label": str(method.get("displayName") or method.get("methodId") or "Propagation"),
+                    "description": str(method.get("description") or "Anchor-conditioned region candidates."),
+                    "kind": "propagation",
+                    "labelSpace": "persistent_region",
+                    "methodId": str(method.get("methodId") or ""),
+                    "engineName": str(method.get("engineName") or ""),
+                    "supportsFullRun": bool(method.get("supportsFullRun", True)),
+                    "supportsRegionPair": bool(method.get("supportsRegionPair", False)),
+                    "stage": str(method.get("stage") or "anchor_to_mask"),
+                    "sourceMethodId": str(method.get("sourceMethodId") or ""),
+                    "sourceLayerKey": str(method.get("sourceLayerKey") or ""),
+                    "layerGroup": str(method.get("layerGroup") or "video_propagation"),
+                    "available": bool(method.get("available", False)),
+                    "availabilityMessage": str(method.get("availabilityMessage") or ""),
+                }
+            )
+
+        layers = []
+        anchor_updated_ns = (
+            self.paths.regions_summary.stat().st_mtime_ns
+            if self.paths.regions_summary.is_file()
+            else 0
+        )
+        for spec in layer_specs:
+            layer_key = normalize_proposal_layer(str(spec["key"]))
+            paths = self.layer_paths(frames, layer_key, raw_name)
+            frame_count = _count_complete_frames(paths, frames) if paths.summary.exists() else 0
+            ready = bool(paths.summary.exists() and frame_count == len(frames))
+            if bool(spec.get("supportsRegionPair", False)):
+                ready = bool(paths.summary.exists() and frame_count > 0)
+            updated = ""
+            progress: dict[str, Any] = {}
+            if paths.progress.exists():
+                try:
+                    progress = json.loads(paths.progress.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    progress = {}
+            if paths.summary.exists():
+                try:
+                    summary = json.loads(paths.summary.read_text(encoding="utf-8"))
+                    updated = str(summary.get("timestampUtc") or summary.get("updatedUtc") or "")
+                except json.JSONDecodeError:
+                    updated = ""
+            progress_updated = str(progress.get("updatedUtc") or "")
+            if progress_updated > updated:
+                updated = progress_updated
+            running = progress.get("status") == "running"
+            failed = progress.get("status") == "failed"
+            message = str(progress.get("message") or "")
+            anchor_stale = bool(
+                layer_key != "sam2"
+                and spec.get("supportsFullRun", False)
+                and paths.summary.is_file()
+                and paths.summary.stat().st_mtime_ns < anchor_updated_ns
+            )
+            if layer_key == "sam2":
+                ready = bool(raw_status.get("ready", ready) and frame_count == len(frames))
+                running = bool(raw_status.get("running", False))
+                failed = bool(raw_status.get("failed", False))
+                message = str(raw_status.get("message") or message)
+            elif anchor_stale:
+                ready = False
+                if not running:
+                    message = "This result is stale because the manual anchors were updated."
+            layers.append(
+                {
+                    "key": layer_key,
+                    **{key: value for key, value in spec.items() if key != "key"},
+                    "ready": ready,
+                    "stale": anchor_stale,
+                    "running": running,
+                    "failed": failed,
+                    "message": message,
+                    "runName": paths.run_dir.name,
+                    "runDir": str(paths.run_dir),
+                    "completedFrameCount": int(frame_count),
+                    "frameCount": int(len(frames)),
+                    "summaryPath": str(paths.summary),
+                    "updatedUtc": updated,
+                    "overlayUrlTemplate": f"/api/proposals/layers/{layer_key}/frame/{{frameId}}/overlay",
+                }
+            )
+        layer_by_key = {str(layer["key"]): layer for layer in layers}
+        for layer in layers:
+            if not str(layer.get("sourceLayerKey") or ""):
+                continue
+            source_key = normalize_proposal_layer(str(layer.get("sourceLayerKey") or ""))
+            source = layer_by_key.get(source_key)
+            source_ready = bool(source and source.get("ready"))
+            source_updated = str(source.get("updatedUtc") or "") if source else ""
+            layer["sourceReady"] = source_ready
+            layer["sourceUpdatedUtc"] = source_updated
+            if not source_ready:
+                layer["ready"] = False
+                layer["message"] = "Run the required source method first."
+            elif int(layer.get("completedFrameCount") or 0) == 0:
+                layer["ready"] = False
+                layer["message"] = "Ready to process the saved source layer."
+            elif source_updated and str(layer.get("updatedUtc") or "") < source_updated:
+                layer["ready"] = False
+                layer["message"] = "This result is stale because its source layer was updated."
+        return {
+            "ready": any(bool(layer["ready"]) for layer in layers),
+            "layers": layers,
+            "defaultLayer": "sam2",
+            "pickOrder": [str(layer["key"]) for layer in layers],
+            "defaultPropagationMethodId": str(propagation_registry.get("defaultMethodId") or ""),
+            "defaultSourceRefinementMethodId": str(
+                propagation_registry.get("defaultSourceRefinementMethodId") or ""
+            ),
+            "methods": method_rows,
+            "updatedUtc": max((str(layer.get("updatedUtc") or "") for layer in layers), default=""),
+        }
 
     def start(self, frames: list[ProposalFrame], payload: dict[str, Any]) -> dict[str, Any]:
         run_name = _slug_token(str(payload.get("runName") or self.default_run_name(frames)))
@@ -249,44 +434,85 @@ class ProposalManager:
         return dict(job)
 
     def overlay_path(self, frames: list[ProposalFrame], frame_id: int, run_name: str | None = None) -> Path:
-        paths = self.ensure_editable_copy(frames, run_name)
+        paths = self.run_paths(_slug_token(run_name or self.default_run_name(frames)))
         return paths.overlay_dir / f"{int(frame_id):06d}.png"
 
-    def label_map_path(self, frames: list[ProposalFrame], frame_id: int, run_name: str | None = None) -> Path:
-        paths = self.ensure_editable_copy(frames, run_name)
+    def layer_overlay_path(self, frames: list[ProposalFrame], frame_id: int, layer: str, run_name: str | None = None) -> Path:
+        paths = self.layer_paths(frames, layer, run_name)
+        return paths.overlay_dir / f"{int(frame_id):06d}.png"
+
+    def layer_label_map_path(self, frames: list[ProposalFrame], frame_id: int, layer: str, run_name: str | None = None) -> Path:
+        paths = self.layer_paths(frames, layer, run_name)
         return paths.label_map_dir / f"{int(frame_id):06d}.npy"
 
-    def metadata_path(self, frames: list[ProposalFrame], frame_id: int, run_name: str | None = None) -> Path:
-        paths = self.ensure_editable_copy(frames, run_name)
+    def layer_metadata_path(self, frames: list[ProposalFrame], frame_id: int, layer: str, run_name: str | None = None) -> Path:
+        paths = self.layer_paths(frames, layer, run_name)
         return paths.metadata_dir / f"{int(frame_id):06d}.json"
 
-    def save_label_map(
+    def save_region_candidate_map(
         self,
         frames: list[ProposalFrame],
         frame_id: int,
         labels: np.ndarray,
         *,
-        edit_records: list[dict[str, Any]] | None = None,
-        run_name: str | None = None,
+        method_id: str,
+        region_rows: list[dict[str, Any]],
+        source_frame_ids_by_region: dict[int, list[int]] | None = None,
+        result_description: str,
+        input_fingerprint: str,
+        stage: str = "anchor_to_mask",
     ) -> dict[str, Any]:
-        edit_paths = self.ensure_editable_copy(frames, run_name)
+        method_id = normalize_method_id(method_id)
+        layer_key = propagation_layer_key(method_id)
+        paths = self.propagation_paths(method_id)
         frame = next((item for item in frames if int(item.frame_id) == int(frame_id)), None)
         if frame is None:
             raise KeyError(frame_id)
-        labels = np.asarray(labels)
+        for directory in [
+            paths.label_map_dir,
+            paths.overlay_dir,
+            paths.metadata_dir,
+        ]:
+            directory.mkdir(parents=True, exist_ok=True)
+
+        labels = np.asarray(labels, dtype=np.uint16)
         if labels.ndim != 2:
-            raise ValueError(f"Expected 2D proposal label map, got shape {labels.shape}.")
+            raise ValueError(f"Expected 2D propagated label map, got shape {labels.shape}.")
+        expected = (int(frame.height), int(frame.width))
+        if labels.shape != expected:
+            raise ValueError(f"Propagated label map shape {labels.shape} does not match frame shape {expected}.")
 
-        npy_path = edit_paths.label_map_dir / f"{int(frame_id):06d}.npy"
-        png_path = edit_paths.label_map_dir / f"{int(frame_id):06d}.png"
-        overlay_path = edit_paths.overlay_dir / f"{int(frame_id):06d}.png"
-        metadata_path = edit_paths.metadata_dir / f"{int(frame_id):06d}.json"
+        npy_path = paths.label_map_dir / f"{int(frame_id):06d}.npy"
+        metadata_path = paths.metadata_dir / f"{int(frame_id):06d}.json"
+        source_frame_ids_by_region = source_frame_ids_by_region or {}
 
-        np.save(npy_path, labels.astype(np.uint16, copy=False))
-        Image.fromarray(labels.astype(np.uint16, copy=False), mode="I;16").save(png_path)
-        Image.fromarray(_transparent_label_overlay(labels), mode="RGBA").save(overlay_path)
+        color_by_label = _region_color_map(region_rows)
+        png_path = paths.label_map_dir / f"{int(frame_id):06d}.png"
+        overlay_path = paths.overlay_dir / f"{int(frame_id):06d}.png"
+        np.save(npy_path, labels)
+        Image.fromarray(labels).save(png_path)
+        Image.fromarray(_transparent_label_overlay(labels, color_by_label), mode="RGBA").save(overlay_path)
 
         label_rows = _label_rows_from_label_map(labels)
+        for row in label_rows:
+            region_id = int(row["labelId"])
+            row["regionId"] = region_id
+            row["sourceRegionId"] = region_id
+            row["proposalKind"] = "propagated_region"
+            row["sourceFrameIds"] = _source_frame_ids(source_frame_ids_by_region.get(region_id, []))
+            row["sourceFrameId"] = int(row["sourceFrameIds"][0]) if row["sourceFrameIds"] else -1
+            row["layer"] = layer_key
+            row["methodId"] = method_id
+            row["labelSpace"] = "persistent_region"
+
+        all_source_frame_ids = sorted(
+            {
+                int(value)
+                for values in source_frame_ids_by_region.values()
+                for value in _source_frame_ids(values)
+                if int(value) >= 0
+            }
+        )
         payload = {
             "frameId": int(frame_id),
             "imageName": frame.image_name,
@@ -300,13 +526,51 @@ class ProposalManager:
             "overlayPng": str(overlay_path),
             "metadata": str(metadata_path),
             "labels": label_rows,
+            "layer": layer_key,
+            "methodId": method_id,
+            "stage": str(stage),
+            "labelSpace": "persistent_region",
+            "sourceFrameId": int(all_source_frame_ids[0]) if all_source_frame_ids else -1,
+            "sourceFrameIds": all_source_frame_ids,
             "updatedUtc": _now(),
-            "editRecords": edit_records or [],
         }
         _write_json(metadata_path, payload)
-        _write_jsonl(edit_paths.frame_index, _metadata_summaries(edit_paths.metadata_dir))
-        _refresh_summary(edit_paths, frames)
+        _write_jsonl(paths.frame_index, _metadata_summaries(paths.metadata_dir))
+        summary = {
+            "schemaVersion": 1,
+            "stage": _candidate_stage_name(stage),
+            "timestampUtc": _now(),
+            "methodId": method_id,
+            "method": result_description,
+            "inputFingerprint": str(input_fingerprint),
+            "runName": paths.run_dir.name,
+            "runDir": str(paths.run_dir),
+            "layer": layer_key,
+            "labelSpace": "persistent_region",
+            "frameCount": int(len(frames)),
+            "frames": _metadata_summaries(paths.metadata_dir),
+            "outputs": {
+                "labelMapDir": str(paths.label_map_dir),
+                "overlayDir": str(paths.overlay_dir),
+                "metadataDir": str(paths.metadata_dir),
+                "frameIndex": str(paths.frame_index),
+                "config": str(paths.config),
+                "input": str(paths.input_manifest),
+            },
+        }
+        _write_json(paths.summary, summary)
         return payload
+
+    def save_propagation_diagnostics(self, method_id: str, rows: list[dict[str, Any]]) -> Path:
+        paths = self.propagation_paths(method_id)
+        path = paths.run_dir / "diagnostics.jsonl"
+        _write_jsonl(path, [dict(row) for row in rows])
+        if paths.summary.is_file():
+            summary = json.loads(paths.summary.read_text(encoding="utf-8"))
+            outputs = summary.setdefault("outputs", {})
+            outputs["diagnostics"] = str(path)
+            _write_json(paths.summary, summary)
+        return path
 
     def _update_job(self, paths: ProposalRunPaths, **updates: Any) -> None:
         with self._lock:
@@ -356,7 +620,7 @@ class ProposalManager:
                     overlay_path = paths.overlay_dir / f"{frame.frame_id:06d}.png"
                     metadata_path = paths.metadata_dir / f"{frame.frame_id:06d}.json"
                     np.save(npy_path, label_map)
-                    Image.fromarray(label_map.astype(np.uint16), mode="I;16").save(png_path)
+                    Image.fromarray(label_map.astype(np.uint16)).save(png_path)
                     Image.fromarray(_transparent_label_overlay(label_map), mode="RGBA").save(overlay_path)
 
                     coverage = float(np.count_nonzero(label_map > 0) / max(label_map.size, 1))
@@ -486,6 +750,15 @@ class ProposalManager:
         return generator, device, autocast_context
 
 
+def _candidate_stage_name(stage: str) -> str:
+    names = {
+        "anchor_to_mask": "interactive_anchor_to_mask_candidates",
+        "dense_recovery": "interactive_dense_recovery_candidates",
+        "identity_refinement": "interactive_identity_refinement_candidates",
+    }
+    return names.get(str(stage), f"interactive_{str(stage).strip() or 'candidate'}_candidates")
+
+
 def _slug_token(value: str) -> str:
     out: list[str] = []
     last = False
@@ -499,36 +772,33 @@ def _slug_token(value: str) -> str:
     return "".join(out).strip("_") or "sam2_auto"
 
 
+def normalize_proposal_layer(value: str) -> str:
+    key = str(value or "sam2").strip().lower().replace("-", "_")
+    if key == "sam2":
+        return "sam2"
+    if is_propagation_layer(key):
+        return propagation_layer_key(propagation_method_id(key))
+    raise ValueError(f"Unknown proposal layer '{value}'. Expected sam2 or propagation_<method_id>.")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _write_json(path: Path, payload: dict[str, Any] | list[Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
-
-
-def _copy_existing(src: Path, dst: Path) -> None:
-    if not src.exists():
-        return
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-
-
-def _copy_tree_files(src_dir: Path, dst_dir: Path) -> None:
-    if not src_dir.exists():
-        return
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    for src in sorted(src_dir.iterdir()):
-        if src.is_file():
-            shutil.copy2(src, dst_dir / src.name)
+    temporary.replace(path)
 
 
 def _label_rows_from_label_map(labels: np.ndarray) -> list[dict[str, Any]]:
@@ -555,6 +825,19 @@ def _label_rows_from_label_map(labels: np.ndarray) -> list[dict[str, Any]]:
     return rows
 
 
+def _source_frame_ids(value: Any) -> list[int]:
+    raw_values = value if isinstance(value, list) else [value]
+    out: set[int] = set()
+    for item in raw_values:
+        try:
+            parsed = int(item)
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 0:
+            out.add(parsed)
+    return sorted(out)
+
+
 def _metadata_summary(path: Path) -> dict[str, Any] | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -577,59 +860,6 @@ def _metadata_summaries(metadata_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _refresh_summary(paths: ProposalRunPaths, frames: list[ProposalFrame]) -> None:
-    if paths.summary.exists():
-        try:
-            summary = json.loads(paths.summary.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            summary = {}
-    else:
-        summary = {}
-    frame_summaries = _metadata_summaries(paths.metadata_dir)
-    summary.update(
-        {
-            "stage": "interactive_sam2_edited_proposals",
-            "timestampUtc": _now(),
-            "runName": paths.run_dir.name,
-            "runDir": str(paths.run_dir),
-            "frameCount": int(len(frames)),
-            "frames": frame_summaries,
-            "outputs": {
-                "labelMapDir": str(paths.label_map_dir),
-                "overlayDir": str(paths.overlay_dir),
-                "metadataDir": str(paths.metadata_dir),
-                "frameIndex": str(paths.frame_index),
-            },
-        }
-    )
-    _write_json(paths.summary, summary)
-
-
-def _repair_editable_metadata(paths: ProposalRunPaths, frames: list[ProposalFrame]) -> None:
-    frame_by_id = {int(frame.frame_id): frame for frame in frames}
-    changed = False
-    for metadata_path in sorted(paths.metadata_dir.glob("*.json")):
-        try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        frame_id = int(payload.get("frameId", metadata_path.stem))
-        frame = frame_by_id.get(frame_id)
-        if frame is not None:
-            payload["imageName"] = frame.image_name
-            payload["width"] = int(frame.width)
-            payload["height"] = int(frame.height)
-        payload["labelMapNpy"] = str(paths.label_map_dir / f"{frame_id:06d}.npy")
-        payload["labelMapPng"] = str(paths.label_map_dir / f"{frame_id:06d}.png")
-        payload["overlayPng"] = str(paths.overlay_dir / f"{frame_id:06d}.png")
-        payload["metadata"] = str(metadata_path)
-        _write_json(metadata_path, payload)
-        changed = True
-    if changed:
-        _write_jsonl(paths.frame_index, _metadata_summaries(paths.metadata_dir))
-        _refresh_summary(paths, frames)
-
-
 def _label_color(label: int) -> np.ndarray:
     value = (int(label) * 1103515245 + 12345) & 0xFFFFFFFF
     return np.array(
@@ -642,16 +872,57 @@ def _label_color(label: int) -> np.ndarray:
     )
 
 
-def _transparent_label_overlay(labels: np.ndarray) -> np.ndarray:
+def _transparent_label_overlay(
+    labels: np.ndarray,
+    color_by_label: dict[int, tuple[int, int, int]] | None = None,
+) -> np.ndarray:
     overlay = np.zeros((*labels.shape, 4), dtype=np.uint8)
     for label in np.unique(labels):
         label_i = int(label)
         if label_i <= 0:
             continue
         mask = labels == label_i
-        overlay[mask, :3] = _label_color(label_i)
+        color = color_by_label.get(label_i) if color_by_label else None
+        overlay[mask, :3] = np.asarray(color, dtype=np.uint8) if color else _label_color(label_i)
         overlay[mask, 3] = 138
     return overlay
+
+
+def _region_color_map(region_rows: list[dict[str, Any]]) -> dict[int, tuple[int, int, int]]:
+    return {
+        int(row.get("id", 0)): _hsl_to_rgb(str(row.get("color", "")))
+        for row in region_rows
+        if int(row.get("id", 0)) > 0
+    }
+
+
+def _hsl_to_rgb(css: str) -> tuple[int, int, int]:
+    try:
+        raw = css.strip().lower()
+        raw = raw.removeprefix("hsl(").removesuffix(")")
+        parts = raw.replace("%", "").split()
+        h = float(parts[0]) % 360.0
+        s = float(parts[1]) / 100.0
+        light = float(parts[2]) / 100.0
+    except Exception:
+        return (124, 199, 255)
+
+    c = (1.0 - abs(2.0 * light - 1.0)) * s
+    x = c * (1.0 - abs((h / 60.0) % 2.0 - 1.0))
+    m = light - c / 2.0
+    if h < 60:
+        rgb = (c, x, 0.0)
+    elif h < 120:
+        rgb = (x, c, 0.0)
+    elif h < 180:
+        rgb = (0.0, c, x)
+    elif h < 240:
+        rgb = (0.0, x, c)
+    elif h < 300:
+        rgb = (x, 0.0, c)
+    else:
+        rgb = (c, 0.0, x)
+    return tuple(int(round((channel + m) * 255.0)) for channel in rgb)
 
 
 def _mask_records(masks: list[dict[str, Any]], config: ProposalConfig) -> list[dict[str, Any]]:
@@ -716,5 +987,10 @@ def _records_to_label_map(
     return labels, rows
 
 
-def _count_existing_overlays(paths: ProposalRunPaths, frames: list[ProposalFrame]) -> int:
-    return sum(1 for frame in frames if (paths.overlay_dir / f"{int(frame.frame_id):06d}.png").exists())
+def _count_complete_frames(paths: ProposalRunPaths, frames: list[ProposalFrame]) -> int:
+    return sum(
+        1
+        for frame in frames
+        if (paths.label_map_dir / f"{int(frame.frame_id):06d}.npy").is_file()
+        and (paths.metadata_dir / f"{int(frame.frame_id):06d}.json").is_file()
+    )

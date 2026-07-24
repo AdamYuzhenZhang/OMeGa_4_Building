@@ -9,50 +9,118 @@ const pointSizeInput = document.getElementById("pointSize");
 const showFrameImageInput = document.getElementById("showFrameImage");
 const frameBackgroundModeInput = document.getElementById("frameBackgroundMode");
 const rotateFramesInput = document.getElementById("rotateFrames");
+const exportPreviewButton = document.getElementById("exportPreview");
 const showPointCloudInput = document.getElementById("showPointCloud");
+const showColmapPointCloudInput = document.getElementById("showColmapPointCloud");
+const useCleanedColmapInput = document.getElementById("useCleanedColmap");
+const useSegmentedColmapInput = document.getElementById("useSegmentedColmap");
+const showFeedforwardPointCloudInput = document.getElementById("showFeedforwardPointCloud");
+const useSegmentedFeedforwardInput = document.getElementById("useSegmentedFeedforward");
+const showOmegaFinalPointCloudInput = document.getElementById("showOmegaFinalPointCloud");
+const useHybridOmegaFinalInput = document.getElementById("useHybridOmegaFinal");
+const hybridOmegaFinalPointCloudStatusEl = document.getElementById("hybridOmegaFinalPointCloudStatus");
+const useSegmentedOmegaFinalInput = document.getElementById("useSegmentedOmegaFinal");
 const detectKeyframesButton = document.getElementById("detectKeyframes");
 const reloadKeyframesButton = document.getElementById("reloadKeyframes");
 const keyframeStatusEl = document.getElementById("keyframeStatus");
 const loadProposalsButton = document.getElementById("loadProposals");
 const runProposalsButton = document.getElementById("runProposals");
 const regenerateProposalsButton = document.getElementById("regenerateProposals");
-const showProposalsInput = document.getElementById("showProposals");
+const proposalLayerOptionsEl = document.getElementById("proposalLayerOptions");
+const proposalLayerSummaryEl = document.getElementById("proposalLayerSummary");
 const proposalStatusEl = document.getElementById("proposalStatus");
 const viewEvidenceStatusEl = document.getElementById("viewEvidenceStatus");
 const generateNormalEvidenceButton = document.getElementById("generateNormalEvidence");
 const generateDepthEvidenceButton = document.getElementById("generateDepthEvidence");
+const generateDinoEvidenceButton = document.getElementById("generateDinoEvidence");
 const normalEvidenceStatusEl = document.getElementById("normalEvidenceStatus");
 const depthEvidenceStatusEl = document.getElementById("depthEvidenceStatus");
+const dinoEvidenceStatusEl = document.getElementById("dinoEvidenceStatus");
+const stableNormalDataTypeInput = document.getElementById("stableNormalDataType");
+const stableNormalVariantInput = document.getElementById("stableNormalVariant");
+const depthAnythingModelInput = document.getElementById("depthAnythingModel");
 const frameMaskStatusEl = document.getElementById("frameMaskStatus");
 const selectedProposalStatusEl = document.getElementById("selectedProposalStatus");
-const pendingMaskStatusEl = document.getElementById("pendingMaskStatus");
 const clearProposalSelectionButton = document.getElementById("clearProposalSelection");
-const updateProposalButton = document.getElementById("updateProposal");
+const regionStatusEl = document.getElementById("regionStatus");
+const regionSuggestionCard = document.getElementById("regionSuggestionCard");
+const regionSuggestionSwatch = document.getElementById("regionSuggestionSwatch");
+const regionSuggestionTitle = document.getElementById("regionSuggestionTitle");
+const regionSuggestionMeta = document.getElementById("regionSuggestionMeta");
+const regionSuggestionReferenceStrip = document.getElementById("regionSuggestionReferenceStrip");
+const useSuggestedRegionButton = document.getElementById("useSuggestedRegion");
+const selectedRegionCard = document.getElementById("selectedRegionCard");
+const selectedRegionSwatch = document.getElementById("selectedRegionSwatch");
+const selectedRegionTitle = document.getElementById("selectedRegionTitle");
+const selectedRegionMeta = document.getElementById("selectedRegionMeta");
+const closeActiveRegionButton = document.getElementById("closeActiveRegion");
+const regionNameInput = document.getElementById("regionName");
+const regionNameLabel = document.getElementById("regionNameLabel");
+const showRegionsInput = document.getElementById("showRegions");
+const frameCompleteInput = document.getElementById("frameComplete");
+const createRegionFromSelectionButton = document.getElementById("createRegionFromSelection");
+const assignSelectionToRegionButton = document.getElementById("assignSelectionToRegion");
+const addSelectionToRegionButton = document.getElementById("addSelectionToRegion");
+const clearSelectionFromRegionsButton = document.getElementById("clearSelectionFromRegions");
+const clearRegionFrameButton = document.getElementById("clearRegionFrame");
+const renameRegionButton = document.getElementById("renameRegion");
+const deleteRegionButton = document.getElementById("deleteRegion");
+const regionReferenceStrip = document.getElementById("regionReferenceStrip");
 const propagationStatusEl = document.getElementById("propagationStatus");
-const propagationNeighborsInput = document.getElementById("propagationNeighbors");
+const propagationMethodInput = document.getElementById("propagationMethod");
 const runPropagationButton = document.getElementById("runPropagation");
+const openPropagationPreviewButton = document.getElementById("openPropagationPreview");
+const sourceRefinementMethodInput = document.getElementById("sourceRefinementMethod");
+const runSourceRefinementButton = document.getElementById("runSourceRefinement");
+const openSourceRefinementPreviewButton = document.getElementById("openSourceRefinementPreview");
+const regionPairMethodInput = document.getElementById("regionPairMethod");
+const testRegionPairButton = document.getElementById("testRegionPair");
+const segmentation3dStatusEl = document.getElementById("segmentation3dStatus");
+const segmentation3dResultsEl = document.getElementById("segmentation3dResults");
+const segmentation3dResultSummaryEl = document.getElementById("segmentation3dResultSummary");
+const segmentation3dMethodInput = document.getElementById("segmentation3dMethod");
+const segmentation3dInput = document.getElementById("segmentation3dInput");
+const segmentation3dSourceField = document.getElementById("segmentation3dSourceField");
+const segmentation3dSourceInput = document.getElementById("segmentation3dSource");
+const segmentation3dManualWeightField = document.getElementById("segmentation3dManualWeightField");
+const segmentation3dManualWeightInput = document.getElementById("segmentation3dManualWeight");
+const segmentation3dPointBudgetInput = document.getElementById("segmentation3dPointBudget");
+const segmentation3dSuperpointsInput = document.getElementById("segmentation3dSuperpoints");
+const runSegmentation3dButton = document.getElementById("runSegmentation3d");
 const propagationModal = document.getElementById("propagationModal");
 const closePropagationModalButton = document.getElementById("closePropagationModal");
 const propagationModalSummary = document.getElementById("propagationModalSummary");
 const propagationResultsEl = document.getElementById("propagationResults");
+const propagationLegendTop = document.getElementById("propagationLegendTop");
+const propagationLegendBottom = document.getElementById("propagationLegendBottom");
 const toolButtons = [...document.querySelectorAll("[data-tool]")];
 const selectionOperationButtons = [...document.querySelectorAll("[data-selection-operation]")];
-const selectionOperationStatusEl = document.getElementById("selectionOperationStatus");
+const methodControlPanels = [...document.querySelectorAll("[data-method-controls]")];
+const sam2SizeInput = document.getElementById("sam2Size");
+const sam2SizeValue = document.getElementById("sam2SizeValue");
+const normalGrowAngleInput = document.getElementById("normalGrowAngle");
+const normalGrowAngleValue = document.getElementById("normalGrowAngleValue");
+const depthGrowEdgeInput = document.getElementById("depthGrowEdge");
+const depthGrowEdgeValue = document.getElementById("depthGrowEdgeValue");
+const rgbdCueSuperpixelsInput = document.getElementById("rgbdCueSuperpixels");
+const rgbdCueSuperpixelsValue = document.getElementById("rgbdCueSuperpixelsValue");
+const runRgbdCueDebugButton = document.getElementById("runRgbdCueDebug");
+const rgbdCueDebugSelect = document.getElementById("rgbdCueDebugSelect");
 const cursorBadge = document.getElementById("cursorBadge");
-const runSam2Button = document.getElementById("runSam2");
-const clearSam2Button = document.getElementById("clearSam2");
+const showPromptDotsInput = document.getElementById("showPromptDots");
+const lockRegionSelectionInput = document.getElementById("lockRegionSelection");
 const clearSelectionButton = document.getElementById("clearSelection");
 const selectionStatusEl = document.getElementById("selectionStatus");
-const idPanelSummary = document.getElementById("idPanelSummary");
+const regionList = document.getElementById("regionList");
 const idList = document.getElementById("idList");
-const proposalSortButtons = [...document.querySelectorAll("[data-proposal-sort]")];
-const targetLabelInput = document.getElementById("targetLabel");
-const assignSelectionButton = document.getElementById("assignSelection");
-const extractSelectionButton = document.getElementById("extractSelection");
-const mergeSelectedIdsButton = document.getElementById("mergeSelectedIds");
-const saveEditsButton = document.getElementById("saveEdits");
-const pendingEditStatusEl = document.getElementById("pendingEditStatus");
 const pointCloudStatusEl = document.getElementById("pointCloudStatus");
+const colmapPointCloudStatusEl = document.getElementById("colmapPointCloudStatus");
+const cleanedColmapPointCloudStatusEl = document.getElementById("cleanedColmapPointCloudStatus");
+const segmentedColmapPointCloudStatusEl = document.getElementById("segmentedColmapPointCloudStatus");
+const feedforwardPointCloudStatusEl = document.getElementById("feedforwardPointCloudStatus");
+const segmentedFeedforwardPointCloudStatusEl = document.getElementById("segmentedFeedforwardPointCloudStatus");
+const omegaFinalPointCloudStatusEl = document.getElementById("omegaFinalPointCloudStatus");
+const segmentedOmegaFinalPointCloudStatusEl = document.getElementById("segmentedOmegaFinalPointCloudStatus");
 
 const state = {
   project: null,
@@ -71,29 +139,71 @@ const state = {
   transition: null,
   pointSize: 2,
   showPointCloud: true,
+  evidencePointClouds: {
+    colmap: {
+      visible: false,
+      mode: "raw",
+      cache: { raw: null, cleaned: null, segmented: null },
+      positions: new Float32Array(),
+      colors: new Uint8Array(),
+      busy: false,
+    },
+    feedforward: {
+      visible: false,
+      mode: "raw",
+      cache: { raw: null, segmented: null },
+      positions: new Float32Array(),
+      colors: new Uint8Array(),
+      busy: false,
+    },
+    omegaFinal: {
+      visible: false,
+      mode: "raw",
+      cache: { raw: null, hybrid: null, segmented: null },
+      positions: new Float32Array(),
+      colors: new Uint8Array(),
+      busy: false,
+    },
+  },
+  pointCloudSourcesStatus: null,
   showFrameImage: true,
   frameBackgroundMode: "rgb",
   rotateFrames: true,
-  showProposals: false,
+  showRegions: false,
   keyframeStatus: null,
   keyframeBusy: false,
   proposalStatus: null,
+  proposalLayerStatus: null,
+  proposalLayers: { sam2: false },
   proposalPollTimer: null,
   viewEvidenceStatus: null,
   viewEvidencePollTimer: null,
   proposalOverlayImages: new Map(),
   proposalOverlayImage: null,
+  proposalLayerOverlayImages: new Map(),
+  proposalLayerOverlayImage: new Map(),
   proposalFrameInfo: null,
   proposalSortMode: "index",
+  regionSortMode: "id",
+  regionStatus: null,
+  regionFrameInfo: null,
+  activeRegionId: 0,
+  regionOverlayImages: new Map(),
+  regionOverlayImage: null,
+  regionBusy: false,
   selectedProposalIds: new Set(),
   activeProposalId: 0,
+  activeProposalLayer: "sam2",
   selectionOps: [],
   proposalSelectionOverlayImage: null,
   proposalSelectionOverlayStamp: 0,
   selectionPreviewArea: 0,
   selectionPreviewCoverage: 0,
+  selectionPreviewProtectedArea: 0,
+  selectionProtectRegions: false,
   dragging: false,
   dragButton: null,
+  activePointerId: null,
   lastPointer: [0, 0],
   labelColors: new Map(),
   tool: "navigate",
@@ -104,12 +214,37 @@ const state = {
   selectedPointIndices: new Set(),
   lasso: null,
   samPrompts: [],
+  rgbdCuePrompts: [],
+  showPromptDots: true,
+  sam2MaskSize: 0.0,
   samBusy: false,
-  editBusy: false,
+  samRefreshTimer: null,
+  samRefreshSerial: 0,
+  normalGrowAngleDeg: 14,
+  cueSmoothness: 0.10,
+  cueSuperpixels: 800,
+  growBusy: false,
+  rgbdCueRefreshTimer: null,
+  rgbdCueRefreshSerial: 0,
+  rgbdDebugBusy: false,
+  rgbdDebugPanels: [],
+  rgbdDebugActiveId: "",
+  rgbdDebugOverlayImage: null,
+  rgbdDebugFrameId: null,
+  rgbdDebugSummary: null,
+  selectionBusy: null,
   proposalUpdateBusy: false,
   propagationBusy: false,
   propagationResult: null,
-  pendingEdits: [],
+  segmentation3dStatus: null,
+  segmentation3dBusy: false,
+  segmentation3dJobId: "",
+  segmentation3dRunId: "",
+  segmentation3dPollTimer: null,
+  propagationMethodId: "",
+  sourceRefinementMethodId: "",
+  regionPairMethodId: "vggts_pair",
+  previewExportBusy: false,
   undoStack: [],
 };
 
@@ -131,12 +266,6 @@ function effectiveSelectionOperation(event = null) {
   return eventSelectionOperation(event) || state.modifierSelectionOperation || state.selectionOperationMode || "replace";
 }
 
-function selectionOperationLabel(operation) {
-  if (operation === "add") return "Add";
-  if (operation === "subtract") return "Subtract";
-  return "Replace";
-}
-
 function selectionOperationSymbol(operation) {
   if (operation === "add") return "+";
   if (operation === "subtract") return "-";
@@ -144,7 +273,15 @@ function selectionOperationSymbol(operation) {
 }
 
 function isSelectionTool(tool = state.tool) {
-  return tool === "click-id" || tool === "lasso" || tool === "mask-pick" || tool === "mask-lasso" || tool === "sam2";
+  return (
+    tool === "click-id" ||
+    tool === "lasso" ||
+    tool === "mask-pick" ||
+    tool === "mask-lasso" ||
+    tool === "sam2" ||
+    tool === "normal-grow" ||
+    tool === "rgbd-cue-select"
+  );
 }
 
 function displaySelectionOperation() {
@@ -155,10 +292,6 @@ function samPromptOperation(event = null) {
   return effectiveSelectionOperation(event) === "subtract" ? "subtract" : "add";
 }
 
-function samPromptLabel(operation) {
-  return operation === "subtract" ? "Negative" : "Positive";
-}
-
 function syncSelectionOperationControls() {
   const effective = displaySelectionOperation();
   const temporary = state.modifierSelectionOperation;
@@ -167,23 +300,6 @@ function syncSelectionOperationControls() {
     button.classList.toggle("active", operation === effective && effective !== "replace");
     button.classList.toggle("temporary", operation === temporary);
     button.setAttribute("aria-pressed", String(operation === state.selectionOperationMode && !temporary));
-  }
-  if (selectionOperationStatusEl) {
-    if (state.tool === "sam2") {
-      if (temporary) {
-        selectionOperationStatusEl.textContent = `${samPromptLabel(temporary)} prompt while held`;
-      } else if (state.selectionOperationMode === "add" || state.selectionOperationMode === "subtract") {
-        selectionOperationStatusEl.textContent = `${samPromptLabel(state.selectionOperationMode)} prompt pinned`;
-      } else {
-        selectionOperationStatusEl.textContent = "Positive prompt by default";
-      }
-    } else if (temporary) {
-      selectionOperationStatusEl.textContent = `${selectionOperationLabel(temporary)} while held`;
-    } else if (state.selectionOperationMode === "add" || state.selectionOperationMode === "subtract") {
-      selectionOperationStatusEl.textContent = `${selectionOperationLabel(state.selectionOperationMode)} pinned`;
-    } else {
-      selectionOperationStatusEl.textContent = "Replace by default";
-    }
   }
   updateCursorBadge();
 }
@@ -216,22 +332,54 @@ function updatePointerPosition(event) {
 
 function updateCursorBadge() {
   if (!cursorBadge) return;
+  const busy = state.selectionBusy;
   const operation = displaySelectionOperation();
   const editingGesture = Boolean(state.lasso) || !state.dragging;
-  const show = state.pointerInsideViewer && editingGesture && isSelectionTool() && (operation === "add" || operation === "subtract");
+  const showBusy = Boolean(busy && state.pointerInsideViewer && editingGesture);
+  const showOperation = state.pointerInsideViewer && editingGesture && isSelectionTool() && (operation === "add" || operation === "subtract");
+  const show = showBusy || showOperation;
   cursorBadge.hidden = !show;
   cursorBadge.style.display = show ? "grid" : "none";
   if (!show) {
     cursorBadge.textContent = "";
-    cursorBadge.classList.remove("add", "subtract");
+    cursorBadge.classList.remove("add", "subtract", "busy");
     return;
   }
   const rect = canvas.getBoundingClientRect();
-  cursorBadge.textContent = selectionOperationSymbol(operation);
-  cursorBadge.classList.toggle("add", operation === "add");
-  cursorBadge.classList.toggle("subtract", operation === "subtract");
+  cursorBadge.textContent = showBusy ? "" : selectionOperationSymbol(operation);
+  cursorBadge.title = showBusy ? `${busy.label}: ${busy.detail}` : "";
+  cursorBadge.classList.toggle("busy", showBusy);
+  cursorBadge.classList.toggle("add", !showBusy && operation === "add");
+  cursorBadge.classList.toggle("subtract", !showBusy && operation === "subtract");
   cursorBadge.style.left = `${state.lastPointerClient[0] - rect.left}px`;
   cursorBadge.style.top = `${state.lastPointerClient[1] - rect.top}px`;
+}
+
+function selectionBusyTool(label) {
+  const key = String(label || "").toLowerCase();
+  if (key.includes("sam2")) return "sam2";
+  if (key.includes("rgb-d") || key.includes("rgbd")) return "rgbd-cue-select";
+  return "";
+}
+
+function syncSelectionBusyUi() {
+  updateCursorBadge();
+}
+
+function setSelectionBusy(label, detail = "Running", tool = "") {
+  state.selectionBusy = {
+    label: String(label || "Selection"),
+    detail: String(detail || "Running"),
+    tool: tool || selectionBusyTool(label),
+  };
+  syncSelectionBusyUi();
+}
+
+function clearSelectionBusy(label = "") {
+  if (!state.selectionBusy) return;
+  if (label && state.selectionBusy.label !== label) return;
+  state.selectionBusy = null;
+  syncSelectionBusyUi();
 }
 
 async function loadJson(url) {

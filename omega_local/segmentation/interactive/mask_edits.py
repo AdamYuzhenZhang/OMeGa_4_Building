@@ -13,11 +13,13 @@ from PIL import Image, ImageDraw, ImageFilter
 def compose_selection_mask(
     label_map: np.ndarray,
     payload: dict[str, Any],
+    *,
+    label_map_resolver=None,
 ) -> np.ndarray:
     """Compose browser selection operations into one boolean image mask."""
     selection_ops = _selection_ops(payload.get("selectionOps", []))
     if selection_ops:
-        return _compose_selection_ops(label_map, selection_ops)
+        return _compose_selection_ops(label_map, selection_ops, label_map_resolver=label_map_resolver)
     return _compose_source_mask(
         label_map,
         {
@@ -38,11 +40,11 @@ def selected_mask_overlay(mask: np.ndarray) -> str:
     return _encode_rgba_png(overlay)
 
 
-def _compose_selection_ops(label_map: np.ndarray, selection_ops: list[dict[str, Any]]) -> np.ndarray:
+def _compose_selection_ops(label_map: np.ndarray, selection_ops: list[dict[str, Any]], *, label_map_resolver=None) -> np.ndarray:
     result = np.zeros(label_map.shape, dtype=bool)
     for item in selection_ops:
         operation = "subtract" if item.get("operation") == "subtract" else "add"
-        source = _selection_source_mask(label_map, item)
+        source = _selection_source_mask(label_map, item, label_map_resolver=label_map_resolver)
         if operation == "subtract":
             result &= ~source
         else:
@@ -50,12 +52,19 @@ def _compose_selection_ops(label_map: np.ndarray, selection_ops: list[dict[str, 
     return result
 
 
-def _selection_source_mask(label_map: np.ndarray, item: dict[str, Any]) -> np.ndarray:
+def _selection_source_mask(label_map: np.ndarray, item: dict[str, Any], *, label_map_resolver=None) -> np.ndarray:
+    source_label_map = label_map
+    layer = str(item.get("layer", "") or "").strip()
+    if layer and label_map_resolver is not None:
+        source_label_map = label_map_resolver(layer)
+        if source_label_map.shape != label_map.shape:
+            raise ValueError(f"Selection layer {layer} shape {source_label_map.shape} does not match base shape {label_map.shape}.")
+
     nested = _selection_ops(item.get("selectionOps", []))
     if nested:
-        mask = _compose_selection_ops(label_map, nested)
+        mask = _compose_selection_ops(label_map, nested, label_map_resolver=label_map_resolver)
     else:
-        mask = _compose_source_mask(label_map, item)
+        mask = _compose_source_mask(source_label_map, item)
 
     mask_png = str(item.get("maskPng", "")).strip()
     if mask_png:
@@ -172,6 +181,9 @@ def _selection_ops(value: Any) -> list[dict[str, Any]]:
             "proposalIds": _positive_ints(item.get("proposalIds", [])),
             "polygons": _source_polygon_ops(item.get("polygons", [])),
         }
+        layer = str(item.get("layer", "") or "").strip()
+        if layer:
+            op["layer"] = layer
         mask_png = str(item.get("maskPng", "")).strip()
         if mask_png:
             op["maskPng"] = mask_png

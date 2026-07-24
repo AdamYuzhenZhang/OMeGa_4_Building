@@ -27,14 +27,18 @@
   position: absolute;
   left: 14px;
   bottom: 14px;
-  max-width: min(720px, calc(100% - 28px));
-  padding: 8px 10px;
+  max-width: min(260px, calc(100% - 28px));
+  padding: 6px 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   background: rgba(8, 10, 12, 0.78);
   color: #d7dde3;
-  font-size: 13px;
+  font-size: 11px;
+  line-height: 15px;
   pointer-events: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
 }
 
 .cursor-badge {
@@ -67,13 +71,38 @@
   background: rgba(194, 58, 67, 0.96);
 }
 
+.cursor-badge.busy {
+  width: 28px;
+  height: 28px;
+  border-color: rgba(145, 218, 255, 0.9);
+  background: rgba(20, 31, 41, 0.96);
+  transform: translate(14px, 14px);
+}
+
+.cursor-badge.busy::before {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #9addff;
+  border-radius: 999px;
+  content: "";
+  animation: busy-spin 0.8s linear infinite;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;
   z-index: 6;
   display: grid;
-  place-items: center;
-  padding: 24px;
+  align-items: start;
+  justify-items: center;
+  padding: 12px 18px 18px;
   background: rgba(0, 0, 0, 0.52);
 }
 
@@ -84,8 +113,8 @@
 .comparison-modal {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
-  width: min(1240px, 94vw);
-  max-height: min(860px, 88vh);
+  width: min(1180px, calc(100vw - 42px));
+  max-height: calc(100% - 6px);
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
@@ -98,7 +127,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px 10px;
+  padding: 9px 12px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -111,26 +140,30 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 8px 14px;
+  padding: 6px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   color: #aeb8c1;
   font-size: 12px;
 }
 
 .comparison-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
   min-height: 0;
-  overflow: auto;
-  padding: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 12px 12px;
 }
 
 .comparison-card {
   display: grid;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px;
+  grid-template-rows: auto auto auto;
+  flex: 0 0 clamp(185px, 18vw, 260px);
+  gap: 6px;
+  min-width: 185px;
+  max-width: 260px;
+  padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.04);
@@ -152,10 +185,24 @@
 .comparison-stack {
   position: relative;
   overflow: hidden;
-  aspect-ratio: 3 / 4;
+  width: 100%;
+  height: clamp(170px, calc((100vh - 330px) / 2), 270px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   background: #090b0d;
+}
+
+.comparison-progress-card {
+  display: grid;
+  place-items: center;
+  flex: 0 0 min(420px, 80vw);
+  min-height: 220px;
+  padding: 18px;
+  border: 1px solid rgba(145, 218, 255, 0.2);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #d8e3ea;
+  font-size: 13px;
 }
 
 .comparison-stack img {
@@ -179,8 +226,36 @@
   mix-blend-mode: screen;
 }
 
+.comparison-stack.waiting .comparison-overlay,
+.comparison-stack.running .comparison-overlay {
+  opacity: 0;
+}
+
+.comparison-stack.waiting::before,
+.comparison-stack.running::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  color: #aeb8c1;
+  font-size: 12px;
+  letter-spacing: 0;
+  content: "waiting";
+}
+
+.comparison-stack.running::before {
+  color: #9addff;
+  content: "running";
+}
+
+.comparison-stack.ready::before {
+  display: none;
+}
+
 .comparison-stack span {
   position: absolute;
+  z-index: 2;
   right: 0;
   bottom: 0;
   left: 0;

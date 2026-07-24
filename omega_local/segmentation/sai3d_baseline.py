@@ -545,6 +545,9 @@ def prepare(args: argparse.Namespace, paths: SAI3DPaths) -> dict[str, Any]:
                 "depthStats": depth_stats,
                 "inputLabelCount": int(np.count_nonzero(np.unique(mask) > 0)),
                 "inputCoverage": float(np.count_nonzero(mask > 0) / max(mask.size, 1)),
+                "viewWeight": max(int(row.get("viewWeight", 1)), 1),
+                "isManualAnchor": bool(row.get("isManualAnchor", False)),
+                "maskSource": str(row.get("maskSource", args.proposal_source_name)),
             }
         )
         print(
@@ -1246,10 +1249,16 @@ class OmegaSAI3DAgent:
         point_labels: np.ndarray,
         point_seen: np.ndarray,
         thresholds: np.ndarray,
+        view_weights: np.ndarray | None = None,
     ) -> tuple[np.ndarray, list[dict[str, Any]]]:
         history: list[dict[str, Any]] = []
         points_labels: np.ndarray | None = None
-        labels_f = point_labels.astype(np.float32, copy=False)
+        weighted_labels, weighted_seen = _repeat_weighted_views(
+            point_labels,
+            point_seen,
+            view_weights,
+        )
+        labels_f = weighted_labels.astype(np.float32, copy=False)
         self.agent.M = int(labels_f.shape[1])
 
         if float(self.args.from_points_thres) > 0.0:
@@ -1262,7 +1271,7 @@ class OmegaSAI3DAgent:
                 point_level=True,
                 k_graph=int(self.args.k_graph),
             )
-            seg_adj = self.agent.get_seg_dok_adjacency(labels_f, point_seen)
+            seg_adj = self.agent.get_seg_dok_adjacency(labels_f, weighted_seen)
             point_stage_labels = self.agent.assign_seg_label(
                 seg_adj,
                 float(self.args.from_points_thres),
@@ -1291,7 +1300,7 @@ class OmegaSAI3DAgent:
                 points_any=self.points,
                 similar_meric=str(self.args.similar_metric),
                 points_label=labels_f,
-                points_seen=point_seen,
+                points_seen=weighted_seen,
             )
             seg_labels = self.agent.assign_seg_label(
                 seg_adj,
@@ -1318,6 +1327,30 @@ class OmegaSAI3DAgent:
         if points_labels is None:
             points_labels = np.zeros(self.points.shape[0], dtype=np.int32)
         return points_labels.astype(np.int32, copy=False), history
+
+
+def _repeat_weighted_views(
+    point_labels: np.ndarray,
+    point_seen: np.ndarray,
+    view_weights: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    labels = np.asarray(point_labels)
+    seen = np.asarray(point_seen)
+    if labels.ndim != 2 or seen.shape != labels.shape:
+        raise ValueError("SAI3D point labels and visibility must be matching N x M arrays.")
+    if view_weights is None:
+        return labels, seen
+    weights = np.asarray(view_weights, dtype=np.int32).reshape(-1)
+    if weights.shape[0] != labels.shape[1]:
+        raise ValueError(
+            f"SAI3D view weights have length {weights.shape[0]}, expected {labels.shape[1]}."
+        )
+    if np.any(weights < 1):
+        raise ValueError("SAI3D view weights must be positive integers.")
+    if np.all(weights == 1):
+        return labels, seen
+    repeated_columns = np.repeat(np.arange(labels.shape[1], dtype=np.int32), weights)
+    return labels[:, repeated_columns], seen[:, repeated_columns]
 
 
 def _parse_threshold_schedule(text: str) -> np.ndarray:
@@ -2467,6 +2500,11 @@ def _compute_observations(args: argparse.Namespace, paths: SAI3DPaths) -> dict[s
             "Check the selected proposal source masks."
         )
     paths.mesh_label_dir.mkdir(parents=True, exist_ok=True)
+    graph_rows = rows[:: max(int(args.sai3d_view_stride), 1)]
+    view_weights = np.asarray(
+        [max(int(row.get("viewWeight", 1)), 1) for row in graph_rows],
+        dtype=np.int32,
+    )
     np.savez_compressed(
         paths.observations_path,
         points=points.astype(np.float32, copy=False),
@@ -2483,7 +2521,8 @@ def _compute_observations(args: argparse.Namespace, paths: SAI3DPaths) -> dict[s
             if point_set.barycentric is not None
             else np.full((points.shape[0], 3), np.nan, dtype=np.float32)
         ),
-        graph_frame_ids=np.asarray([int(row["sai3dFrameId"]) for row in rows[:: max(int(args.sai3d_view_stride), 1)]], dtype=np.int32),
+        graph_frame_ids=np.asarray([int(row["sai3dFrameId"]) for row in graph_rows], dtype=np.int32),
+        view_weights=view_weights,
     )
     observation_summary = _write_observation_debug_outputs(
         paths=paths,
@@ -2518,6 +2557,8 @@ def _compute_observations(args: argparse.Namespace, paths: SAI3DPaths) -> dict[s
         "sceneName": paths.scene_name,
         "frameCount": int(len(rows)),
         "graphFrameCount": int(point_labels.shape[1]),
+        "effectiveWeightedViewCount": int(view_weights.sum()),
+        "manualAnchorFrameCount": int(sum(bool(row.get("isManualAnchor")) for row in graph_rows)),
         "pointCount": int(points.shape[0]),
         "pointSource": str(point_set.source),
         "vertexCount": int(vertices.shape[0]),
@@ -2539,6 +2580,7 @@ def _compute_observations(args: argparse.Namespace, paths: SAI3DPaths) -> dict[s
             "visibilityRtol": float(args.visibility_rtol),
             "visibilityAtol": float(args.visibility_atol),
             "sai3dViewStride": int(args.sai3d_view_stride),
+            "viewWeighting": "integer_view_replication",
         },
         "pointSet": point_set.summary,
         "superpoints": superpoint_summary,
@@ -2558,6 +2600,7 @@ def _compute_observations(args: argparse.Namespace, paths: SAI3DPaths) -> dict[s
         "superpoint_labels": superpoint_labels,
         "point_labels": point_labels,
         "point_seen": point_seen,
+        "view_weights": view_weights,
         "projection_cache": projection_cache,
         "frame_stats": frame_stats,
     }
@@ -2580,6 +2623,7 @@ def segment(args: argparse.Namespace, paths: SAI3DPaths) -> dict[str, Any]:
     superpoint_labels = observed["superpoint_labels"]
     point_labels = observed["point_labels"]
     point_seen = observed["point_seen"]
+    view_weights = observed["view_weights"]
     projection_cache = observed["projection_cache"]
     frame_stats = observed["frame_stats"]
 
@@ -2589,6 +2633,7 @@ def segment(args: argparse.Namespace, paths: SAI3DPaths) -> dict[str, Any]:
         point_labels=point_labels,
         point_seen=point_seen,
         thresholds=thresholds,
+        view_weights=view_weights,
     )
     vertex_labels, face_labels = _map_point_labels_to_mesh_vertices(
         mesh=mesh,
@@ -2635,6 +2680,8 @@ def segment(args: argparse.Namespace, paths: SAI3DPaths) -> dict[str, Any]:
         "sceneName": paths.scene_name,
         "frameCount": int(len(rows)),
         "graphFrameCount": int(point_labels.shape[1]),
+        "effectiveWeightedViewCount": int(view_weights.sum()),
+        "manualAnchorFrameCount": int(np.count_nonzero(view_weights > 1)),
         "pointCount": int(points.shape[0]),
         "pointSource": str(point_set.source),
         "vertexCount": int(vertices.shape[0]),
@@ -2667,6 +2714,7 @@ def segment(args: argparse.Namespace, paths: SAI3DPaths) -> dict[str, Any]:
             "visibilityRtol": float(args.visibility_rtol),
             "visibilityAtol": float(args.visibility_atol),
             "sai3dViewStride": int(args.sai3d_view_stride),
+            "viewWeighting": "integer_view_replication",
         },
         "superpoints": observed["summary"].get("superpoints", {}),
         "observations": observed["summary"].get("observations", {}),

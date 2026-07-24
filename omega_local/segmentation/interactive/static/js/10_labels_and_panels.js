@@ -50,61 +50,6 @@ function indicesForLabel(label) {
   return indices;
 }
 
-function cloneLabelSummary(summary) {
-  if (!summary) return null;
-  return {
-    ...summary,
-    labels: Array.isArray(summary.labels)
-      ? summary.labels.map((item) => ({ label: Number(item.label), count: Number(item.count) }))
-      : [],
-  };
-}
-
-function labelSummaryMap() {
-  const map = new Map();
-  if (state.labelSummary && Array.isArray(state.labelSummary.labels)) {
-    for (const item of state.labelSummary.labels) {
-      const label = Number(item.label);
-      if (label > 0) map.set(label, Number(item.count) || 0);
-    }
-  }
-  return map;
-}
-
-function setLabelSummaryFromMap(map) {
-  const labels = [...map.entries()]
-    .filter(([label, count]) => label > 0 && count > 0)
-    .sort((a, b) => a[0] - b[0])
-    .map(([label, count]) => ({ label, count }));
-  const pointCount = state.labelSummary ? state.labelSummary.pointCount : state.labels.length;
-  state.labelSummary = {
-    pointCount,
-    labelCount: labels.length,
-    labels,
-  };
-}
-
-function adjustLabelSummaryForAssignments(oldLabels, target) {
-  const map = labelSummaryMap();
-  for (const label of oldLabels) {
-    if (label > 0) map.set(label, Math.max(0, (map.get(label) || 0) - 1));
-  }
-  map.set(target, (map.get(target) || 0) + oldLabels.length);
-  setLabelSummaryFromMap(map);
-}
-
-function adjustLabelSummaryForMerge(labels, target) {
-  const map = labelSummaryMap();
-  let moved = 0;
-  for (const label of labels) {
-    if (label === target) continue;
-    moved += map.get(label) || 0;
-    map.delete(label);
-  }
-  map.set(target, (map.get(target) || 0) + moved);
-  setLabelSummaryFromMap(map);
-}
-
 function clonePolygonOps(ops) {
   return Array.isArray(ops)
     ? ops.map((entry) => ({
@@ -126,6 +71,7 @@ function cloneSelectionOps(ops) {
           : [],
         polygons: clonePolygonOps(entry.polygons),
       };
+      if (entry.layer) cloned.layer = normalizeProposalLayer(entry.layer);
       if (typeof entry.maskPng === "string" && entry.maskPng.length) cloned.maskPng = entry.maskPng;
       const nested = cloneSelectionOps(entry.selectionOps);
       if (nested.length) cloned.selectionOps = nested;
@@ -150,6 +96,10 @@ function cloneSamPrompts(prompts) {
     : [];
 }
 
+function cloneRgbdCuePrompts(prompts) {
+  return cloneSamPrompts(prompts);
+}
+
 function hasLassoPixelSelection() {
   return state.selectionOps.some((entry) => (
     Array.isArray(entry.polygons) &&
@@ -170,10 +120,119 @@ function normalizeProposalId(value) {
   return id > 0 ? id : null;
 }
 
-function selectionSourceForProposalId(value) {
+function normalizeProposalLayer(value) {
+  const key = String(value || "sam2").trim().toLowerCase().replaceAll("-", "_");
+  if (key === "sam2" || key === "raw" || key === "auto" || key === "initial") return "sam2";
+  const rows = state.proposalLayerStatus && Array.isArray(state.proposalLayerStatus.layers)
+    ? state.proposalLayerStatus.layers
+    : [];
+  const match = rows.find((row) => (
+    String(row.key || "").toLowerCase() === key ||
+    String(row.methodId || "").toLowerCase() === key
+  ));
+  if (match) return String(match.key);
+  return key;
+}
+
+function proposalLayerPriorityOrder() {
+  const status = state.proposalLayerStatus || {};
+  if (Array.isArray(status.pickOrder) && status.pickOrder.length) {
+    return status.pickOrder.map(normalizeProposalLayer);
+  }
+  return ["sam2"];
+}
+
+function isPropagatedProposalLayer(layer) {
+  const key = normalizeProposalLayer(layer);
+  const row = proposalLayerStatus(key);
+  return row ? row.labelSpace === "persistent_region" : key.startsWith("propagation_");
+}
+
+function proposalLayerDrawOrder(layers) {
+  return [...layers].reverse();
+}
+
+function proposalLayerLabel(layer) {
+  const key = normalizeProposalLayer(layer);
+  const row = proposalLayerStatus(key);
+  if (row && row.label) return String(row.label);
+  return key === "sam2" ? "SAM2" : key;
+}
+
+function proposalRegionId(proposal) {
+  const layer = normalizeProposalLayer(proposal && proposal.layer || "sam2");
+  return Number(
+    proposal && (
+      proposal.regionId ||
+      proposal.sourceRegionId ||
+      (isPropagatedProposalLayer(layer) ? proposal.labelId : 0)
+    )
+  ) || 0;
+}
+
+function proposalRegionRow(proposal) {
+  const rid = proposalRegionId(proposal);
+  if (rid <= 0 || typeof regionRows !== "function") return null;
+  return regionRows().find((region) => Number(region.id) === rid) || null;
+}
+
+function proposalRegionName(proposal) {
+  const rid = proposalRegionId(proposal);
+  const region = proposalRegionRow(proposal);
+  if (region && region.name) return region.name;
+  return rid > 0 ? `region_${rid}` : "";
+}
+
+function proposalDisplayName(proposal) {
+  const layer = normalizeProposalLayer(proposal && proposal.layer ? proposal.layer : "sam2");
+  const labelId = Number(proposal && proposal.labelId) || 0;
+  if (isPropagatedProposalLayer(layer)) {
+    const rid = proposalRegionId(proposal) || labelId;
+    const name = proposalRegionName(proposal);
+    return name ? `R${rid} ${name}` : `R${rid}`;
+  }
+  return `${proposalLayerLabel(layer)} ${labelId}`;
+}
+
+function proposalDisplayColor(proposal) {
+  const layer = normalizeProposalLayer(proposal && proposal.layer ? proposal.layer : "sam2");
+  const labelId = Number(proposal && proposal.labelId) || 0;
+  if (isPropagatedProposalLayer(layer)) {
+    const region = proposalRegionRow(proposal);
+    if (region && typeof regionColor === "function") return regionColor(region);
+    return palette((proposalRegionId(proposal) || labelId) + 900);
+  }
+  return palette(labelId + (layer === "sam2" ? 300 : 0));
+}
+
+function proposalCountText(proposal) {
+  const pixels = Number(proposal.assignedPixels || proposal.rawAreaPixels || 0);
+  const prefix = isPropagatedProposalLayer(proposal.layer || "sam2") ? "propagated" : "proposal";
+  return pixels > 0 ? `${formatCount(pixels)} px | ${prefix}` : `${prefix} region`;
+}
+
+function proposalKey(layer, id) {
+  const normalizedId = normalizeProposalId(id);
+  if (normalizedId === null) return "";
+  return `${normalizeProposalLayer(layer)}:${normalizedId}`;
+}
+
+function parseProposalKey(key) {
+  const [layer, id] = String(key || "").split(":");
+  return {
+    layer: normalizeProposalLayer(layer),
+    id: normalizeProposalId(id) || 0,
+  };
+}
+
+function selectedProposalCount() {
+  return state.selectedProposalIds.size;
+}
+
+function selectionSourceForProposalId(value, layer = "sam2") {
   const id = Number(value) || 0;
   if (id <= 0) return null;
-  return { proposalIds: [id] };
+  return { layer: normalizeProposalLayer(layer), proposalIds: [id] };
 }
 
 function appendSelectionSource(source, operation = "add") {
@@ -183,6 +242,7 @@ function appendSelectionSource(source, operation = "add") {
     proposalIds: Array.isArray(source.proposalIds) ? [...source.proposalIds] : [],
     polygons: clonePolygonOps(source.polygons),
   };
+  if (source.layer) op.layer = normalizeProposalLayer(source.layer);
   if (typeof source.maskPng === "string" && source.maskPng.length) op.maskPng = source.maskPng;
   const nested = cloneSelectionOps(source.selectionOps);
   if (nested.length) op.selectionOps = nested;
@@ -194,17 +254,17 @@ function appendSelectionSource(source, operation = "add") {
 
 function pushUndoSnapshot() {
   state.undoStack.push({
-    labels: new Int32Array(state.labels),
-    labelSummary: cloneLabelSummary(state.labelSummary),
     selectedPointIndices: [...state.selectedPointIndices],
     selectedProposalIds: [...state.selectedProposalIds],
     activeProposalId: state.activeProposalId,
+    activeProposalLayer: state.activeProposalLayer,
     selectionOps: cloneSelectionOps(state.selectionOps),
     selectionPreviewArea: state.selectionPreviewArea,
     selectionPreviewCoverage: state.selectionPreviewCoverage,
+    selectionPreviewProtectedArea: state.selectionPreviewProtectedArea,
+    selectionProtectRegions: state.selectionProtectRegions,
     samPrompts: cloneSamPrompts(state.samPrompts),
-    pendingEditCount: state.pendingEdits.length,
-    targetValue: targetLabelInput ? targetLabelInput.value : "",
+    rgbdCuePrompts: cloneRgbdCuePrompts(state.rgbdCuePrompts),
   });
   if (state.undoStack.length > 60) {
     state.undoStack.shift();
@@ -212,103 +272,143 @@ function pushUndoSnapshot() {
 }
 
 function undoLastEdit() {
-  if (state.editBusy || !state.undoStack.length) return;
+  if (!state.undoStack.length) return;
   const snapshot = state.undoStack.pop();
-  state.labels = snapshot.labels;
-  state.labelSummary = snapshot.labelSummary;
   state.selectedPointIndices = new Set(snapshot.selectedPointIndices);
   state.selectedProposalIds = new Set(snapshot.selectedProposalIds || []);
   state.activeProposalId = Number(snapshot.activeProposalId) || 0;
+  state.activeProposalLayer = normalizeProposalLayer(snapshot.activeProposalLayer || "sam2");
   state.selectionOps = cloneSelectionOps(snapshot.selectionOps);
   state.selectionPreviewArea = Number(snapshot.selectionPreviewArea) || 0;
   state.selectionPreviewCoverage = Number(snapshot.selectionPreviewCoverage) || 0;
+  state.selectionPreviewProtectedArea = Number(snapshot.selectionPreviewProtectedArea) || 0;
+  state.selectionProtectRegions = Boolean(snapshot.selectionProtectRegions);
+  if (lockRegionSelectionInput) lockRegionSelectionInput.checked = state.selectionProtectRegions;
   state.samPrompts = cloneSamPrompts(snapshot.samPrompts);
-  state.pendingEdits = state.pendingEdits.slice(0, snapshot.pendingEditCount);
-  if (targetLabelInput) targetLabelInput.value = snapshot.targetValue;
+  if (state.samRefreshTimer) {
+    clearTimeout(state.samRefreshTimer);
+    state.samRefreshTimer = null;
+  }
+  state.samRefreshSerial += 1;
+  state.rgbdCuePrompts = cloneRgbdCuePrompts(snapshot.rgbdCuePrompts);
   syncSelectionControls();
   syncSamControls();
   syncSelectionOperationControls();
   syncMaskEditControls();
-  syncSaveControls();
   loadProposalSelectionOverlay();
   render();
   if (state.selectedFrame) {
     loadActiveProposalOverlay(state.selectedFrame.id);
   }
-  setSelectionStatus(hasUnsavedEdits() ? `Undid last action | ${unsavedEditCount()} unsaved` : "Undid last action");
+  setSelectionStatus("Undid last selection action");
   render();
 }
 
+function idPanelSectionHeader(text, controls = null) {
+  const title = document.createElement("div");
+  title.className = "id-section-title";
+  const label = document.createElement("span");
+  label.className = "id-section-title-text";
+  label.textContent = text;
+  title.appendChild(label);
+  if (controls) title.appendChild(controls);
+  return title;
+}
+
+function sortButtonGroup(label, buttons) {
+  const group = document.createElement("div");
+  group.className = "section-sort";
+  group.setAttribute("aria-label", label);
+  for (const spec of buttons) {
+    const button = document.createElement("button");
+    button.className = "section-sort-button";
+    button.type = "button";
+    button.textContent = spec.label;
+    if (spec.dataset) {
+      for (const [key, value] of Object.entries(spec.dataset)) {
+        button.dataset[key] = String(value);
+      }
+    }
+    if (spec.active) {
+      button.classList.add("active");
+      button.setAttribute("aria-pressed", "true");
+    } else {
+      button.setAttribute("aria-pressed", "false");
+    }
+    if (typeof spec.onClick === "function") {
+      button.addEventListener("click", spec.onClick);
+    }
+    group.appendChild(button);
+  }
+  return group;
+}
+
 function renderIdPanel() {
-  if (!idList || !idPanelSummary) return;
+  if (!idList) return;
+  if (typeof renderRegionPanel === "function") {
+    renderRegionPanel();
+  }
   const stats = idStats();
   const totalPoints = state.labelSummary ? state.labelSummary.pointCount : state.labels.length;
   const proposalRows = sortedProposalRows(
     state.proposalFrameInfo && Array.isArray(state.proposalFrameInfo.labels)
       ? state.proposalFrameInfo.labels
       : []
-  );
-  idPanelSummary.textContent = proposalRows.length
-    ? `${formatCount(proposalRows.length)} proposals`
-    : "No frame proposals";
+  ).filter((proposal) => state.proposalLayers[normalizeProposalLayer(proposal.layer || "sam2")]);
   syncProposalSortControls();
   idList.textContent = "";
 
-  if (proposalRows.length) {
-    const title = document.createElement("div");
-    title.className = "id-section-title";
-    title.textContent = "Active Frame Proposal IDs";
-    idList.appendChild(title);
-    for (const proposal of proposalRows) {
-      const labelId = Number(proposal.labelId) || 0;
-      if (labelId <= 0) continue;
-      const row = document.createElement("div");
-      row.className = "id-row frame-mask-row";
-      row.tabIndex = 0;
-      row.setAttribute("role", "button");
-      row.classList.toggle("active", state.selectedProposalIds.has(labelId) || state.activeProposalId === labelId);
-      row.title = "Click to select this proposal ID as the update target.";
+  idList.appendChild(idPanelSectionHeader(
+    `Proposals | ${formatCount(proposalRows.length)}`,
+    proposalSortControl()
+  ));
 
-      const swatch = document.createElement("span");
-      swatch.className = "id-swatch";
-      swatch.style.background = palette(labelId);
-
-      const main = document.createElement("span");
-      main.className = "id-main";
-      const name = document.createElement("div");
-      name.className = "id-name";
-      name.textContent = `proposal_${labelId}`;
-      const count = document.createElement("div");
-      count.className = "id-count";
-      const pixels = Number(proposal.assignedPixels || proposal.rawAreaPixels || 0);
-      count.textContent = pixels > 0 ? `${formatCount(pixels)} px` : "proposal region";
-      main.append(name, count);
-
-      const selected = document.createElement("span");
-      selected.className = "id-selected";
-      selected.textContent = state.activeProposalId === labelId ? "target" : state.selectedProposalIds.has(labelId) ? "selected" : "pick";
-      row.append(swatch, main, selected);
-      row.addEventListener("click", () => {
-        applyProposalSelection([labelId], "replace");
-        setSelectionStatus(`Proposal ${labelId} selected as target`);
-      });
-      idList.appendChild(row);
-    }
-  }
-
-  if (!proposalRows.length && !stats.length) {
+  if (!proposalRows.length) {
     const empty = document.createElement("div");
     empty.className = "id-empty";
-    empty.textContent = "No edited proposals yet. Use Pick or Lasso, then update the frame proposal.";
+    empty.textContent = "No visible candidate proposals yet. Enable SAM2 or propagated suggestions.";
     idList.appendChild(empty);
-    return;
+  }
+
+  for (const proposal of proposalRows) {
+    const labelId = Number(proposal.labelId) || 0;
+    const layer = normalizeProposalLayer(proposal.layer || "sam2");
+    const key = proposalKey(layer, labelId);
+    if (labelId <= 0) continue;
+    const row = document.createElement("div");
+    row.className = "id-row frame-mask-row";
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.classList.toggle("active", state.selectedProposalIds.has(key) || (state.activeProposalId === labelId && state.activeProposalLayer === layer));
+    row.title = "Click to select this proposal region from its layer.";
+
+    const swatch = document.createElement("span");
+    swatch.className = "id-swatch";
+    swatch.style.background = proposalDisplayColor(proposal);
+
+    const main = document.createElement("span");
+    main.className = "id-main";
+    const name = document.createElement("div");
+    name.className = "id-name";
+    name.textContent = proposalDisplayName(proposal);
+    const count = document.createElement("div");
+    count.className = "id-count";
+    count.textContent = proposalCountText(proposal);
+    main.append(name, count);
+
+    const selected = document.createElement("span");
+    selected.className = "id-selected";
+    selected.textContent = state.activeProposalId === labelId && state.activeProposalLayer === layer ? "target" : state.selectedProposalIds.has(key) ? "selected" : "pick";
+    row.append(swatch, main, selected);
+    row.addEventListener("click", () => {
+      applyProposalSelection([{ labelId, layer }], "replace");
+      setSelectionStatus(`${proposalDisplayName(proposal)} selected`);
+    });
+    idList.appendChild(row);
   }
 
   if (stats.length) {
-    const title = document.createElement("div");
-    title.className = "id-section-title";
-    title.textContent = `Point IDs | ${formatCount(totalPoints)} pts`;
-    idList.appendChild(title);
+    idList.appendChild(idPanelSectionHeader(`Points | ${formatCount(totalPoints)} pts`));
   }
 
   for (const item of stats) {
@@ -363,20 +463,44 @@ function sortedProposalRows(rows) {
   const sorted = rows
     .map((proposal) => ({ ...proposal }))
     .filter((proposal) => Number(proposal.labelId) > 0);
+  const layerRank = new Map(proposalLayerPriorityOrder().map((layer, index) => [layer, index]));
   if (state.proposalSortMode === "pixels") {
     sorted.sort((a, b) => {
       const pixelDelta = proposalPixelCount(b) - proposalPixelCount(a);
       if (pixelDelta !== 0) return pixelDelta;
+      const layerDelta = (layerRank.get(normalizeProposalLayer(a.layer || "sam2")) ?? 999) - (layerRank.get(normalizeProposalLayer(b.layer || "sam2")) ?? 999);
+      if (layerDelta !== 0) return layerDelta;
       return (Number(a.labelId) || 0) - (Number(b.labelId) || 0);
     });
     return sorted;
   }
-  sorted.sort((a, b) => (Number(a.labelId) || 0) - (Number(b.labelId) || 0));
+  sorted.sort((a, b) => {
+    const layerDelta = (layerRank.get(normalizeProposalLayer(a.layer || "sam2")) ?? 999) - (layerRank.get(normalizeProposalLayer(b.layer || "sam2")) ?? 999);
+    if (layerDelta !== 0) return layerDelta;
+    return (Number(a.labelId) || 0) - (Number(b.labelId) || 0);
+  });
   return sorted;
 }
 
+function proposalSortControl() {
+  return sortButtonGroup("Proposal sort mode", [
+    {
+      label: "Index",
+      active: state.proposalSortMode === "index",
+      dataset: { proposalSort: "index" },
+      onClick: () => setProposalSortMode("index"),
+    },
+    {
+      label: "Pixels",
+      active: state.proposalSortMode === "pixels",
+      dataset: { proposalSort: "pixels" },
+      onClick: () => setProposalSortMode("pixels"),
+    },
+  ]);
+}
+
 function syncProposalSortControls() {
-  for (const button of proposalSortButtons) {
+  for (const button of document.querySelectorAll("[data-proposal-sort]")) {
     const mode = button.dataset.proposalSort || "index";
     const active = mode === state.proposalSortMode;
     button.classList.toggle("active", active);

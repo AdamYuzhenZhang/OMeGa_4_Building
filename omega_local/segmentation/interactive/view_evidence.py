@@ -22,7 +22,6 @@ from .view_evidence_images import (
 )
 from .view_evidence_models import DepthAnythingPredictor, StableNormalPredictor
 from .view_evidence_store import (
-    _adopt_legacy_evidence_run,
     _clear_target_outputs,
     _count_existing,
     _count_generated_kind,
@@ -31,6 +30,7 @@ from .view_evidence_store import (
     _now,
     _read_frame_metadata,
     _slug_token,
+    _target_progress_count,
     _target_label,
     _target_names,
     _targets_ready,
@@ -49,6 +49,7 @@ class ViewEvidenceFrame:
     height: int
     image_name: str
     image_path: Path
+    inference_image_path: Path
     manifest_row: dict[str, Any]
 
 
@@ -75,9 +76,13 @@ class ViewEvidenceConfig:
     normal_source: str = "stable_normal"
     depth_source: str = "depth_anything_v2"
     stable_normal_root: Path = THIRD_PARTY_ROOT / "StableNormal"
-    stable_normal_variant: str = "turbo"
-    stable_normal_processing_resolution: int = 1024
-    depth_anything_model: str = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
+    stable_normal_variant: str = "stable"
+    stable_normal_processing_resolution: int = 1536
+    stable_normal_data_type: str = "outdoor"
+    stable_normal_num_inference_steps: int = 10
+    stable_normal_ensemble_size: int = 1
+    stable_normal_batch_size: int = 1
+    depth_anything_model: str = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf"
     device: str = "auto"
     overwrite: bool = False
 
@@ -90,6 +95,10 @@ class ViewEvidenceConfig:
             "stableNormalRoot": str(self.stable_normal_root),
             "stableNormalVariant": self.stable_normal_variant,
             "stableNormalProcessingResolution": int(self.stable_normal_processing_resolution),
+            "stableNormalDataType": self.stable_normal_data_type,
+            "stableNormalNumInferenceSteps": int(self.stable_normal_num_inference_steps),
+            "stableNormalEnsembleSize": int(self.stable_normal_ensemble_size),
+            "stableNormalBatchSize": int(self.stable_normal_batch_size),
             "depthAnythingModel": self.depth_anything_model,
             "device": self.device,
             "overwrite": bool(self.overwrite),
@@ -132,7 +141,6 @@ class ViewEvidenceManager:
                 active_job = dict(self._job)
 
         paths = self.run_paths(run_name)
-        _adopt_legacy_evidence_run(paths, run_name)
         normal_count = _count_generated_kind(paths, frames, "normal")
         depth_count = _count_generated_kind(paths, frames, "depth")
         if active_job is not None:
@@ -142,6 +150,10 @@ class ViewEvidenceManager:
                 payload = json.loads(paths.progress.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 payload = {}
+            if payload.get("running"):
+                payload["running"] = False
+                payload["failed"] = False
+                payload["message"] = "Previous evidence run was interrupted; generate again to finish missing frames."
         elif paths.summary.exists():
             payload = {
                 "runName": run_name,
@@ -175,6 +187,8 @@ class ViewEvidenceManager:
         payload.setdefault("completedFrameCount", _count_existing(paths.metadata_dir, frames))
         payload["normalFrameCount"] = normal_count
         payload["depthFrameCount"] = depth_count
+        if not payload.get("running"):
+            payload["completedFrameCount"] = max(int(normal_count), int(depth_count))
         payload["normalReady"] = bool(normal_status["ready"])
         payload["depthReady"] = bool(depth_status["ready"])
         payload["normalStatus"] = normal_status
@@ -200,17 +214,19 @@ class ViewEvidenceManager:
             normal_source="stable_normal",
             depth_source="depth_anything_v2",
             stable_normal_root=Path(str(payload.get("stableNormalRoot") or THIRD_PARTY_ROOT / "StableNormal")),
-            stable_normal_variant=str(payload.get("stableNormalVariant", "turbo")),
-            stable_normal_processing_resolution=int(payload.get("stableNormalProcessingResolution", 1024)),
+            stable_normal_variant=str(payload.get("stableNormalVariant", "stable")),
+            stable_normal_processing_resolution=int(payload.get("stableNormalProcessingResolution", 1536)),
+            stable_normal_data_type=str(payload.get("stableNormalDataType", "outdoor")),
+            stable_normal_num_inference_steps=int(payload.get("stableNormalNumInferenceSteps", 10)),
+            stable_normal_ensemble_size=int(payload.get("stableNormalEnsembleSize", 1)),
+            stable_normal_batch_size=int(payload.get("stableNormalBatchSize", 1)),
             depth_anything_model=str(
-                payload.get("depthAnythingModel", "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf")
+                payload.get("depthAnythingModel", "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf")
             ),
             device=str(payload.get("device", "auto")),
             overwrite=bool(payload.get("overwrite", False)),
         )
         paths = self.run_paths(run_name)
-        _adopt_legacy_evidence_run(paths, run_name)
-
         with self._lock:
             if self._job is not None and self._job.get("running"):
                 return dict(self._job)
@@ -247,6 +263,7 @@ class ViewEvidenceManager:
                             "updatedUtc": _now(),
                         },
                     )
+            initial_completed = _target_progress_count(paths, frames, targets)
             self._job = {
                 "runName": run_name,
                 "runDir": str(paths.run_dir),
@@ -255,9 +272,9 @@ class ViewEvidenceManager:
                 "running": True,
                 "failed": False,
                 "frameCount": len(frames),
-                "completedFrameCount": 0,
+                "completedFrameCount": int(initial_completed),
                 "currentFrameId": None,
-                "message": f"Starting {_target_label(targets)} generation.",
+                "message": f"Starting {_target_label(targets)} generation from {initial_completed}/{len(frames)} valid frames.",
                 "updatedUtc": _now(),
             }
             _write_json(paths.progress, self._job)
@@ -269,14 +286,14 @@ class ViewEvidenceManager:
                         "target": target,
                         "ready": False,
                         "running": True,
-                        "failed": False,
-                        "frameCount": len(frames),
-                        "completedFrameCount": 0,
-                        "currentFrameId": None,
-                        "message": f"Starting {_target_label((target,))}.",
-                        "updatedUtc": _now(),
-                    },
-                )
+                            "failed": False,
+                            "frameCount": len(frames),
+                            "completedFrameCount": int(initial_completed),
+                            "currentFrameId": None,
+                            "message": f"Starting {_target_label((target,))} from {initial_completed}/{len(frames)} valid frames.",
+                            "updatedUtc": _now(),
+                        },
+                    )
 
         thread = threading.Thread(target=self._run_job, args=(frames, config, paths), daemon=True)
         thread.start()
@@ -284,7 +301,6 @@ class ViewEvidenceManager:
 
     def image_path(self, frames: list[ViewEvidenceFrame], frame_id: int, kind: str, run_name: str | None = None) -> Path:
         paths = self.run_paths(_slug_token(run_name or self.default_run_name(frames)))
-        _adopt_legacy_evidence_run(paths, _slug_token(run_name or self.default_run_name(frames)))
         kind = str(kind).strip().lower().replace("_", "-")
         if kind in {"normal", "normal-rgb"}:
             path = paths.normal_dir / f"{int(frame_id):06d}.png"
@@ -303,6 +319,21 @@ class ViewEvidenceManager:
             raise FileNotFoundError(f"Generated {source_kind} evidence does not exist for frame {frame_id}: {path}")
         return path
 
+    def npz_path(self, frames: list[ViewEvidenceFrame], frame_id: int, kind: str, run_name: str | None = None) -> Path:
+        paths = self.run_paths(_slug_token(run_name or self.default_run_name(frames)))
+        kind = str(kind).strip().lower().replace("_", "-")
+        if kind in {"normal", "normal-rgb"}:
+            source_kind = "normal"
+            path = paths.normal_npz_dir / f"{int(frame_id):06d}.npz"
+        elif kind in {"depth", "depth-rgb"}:
+            source_kind = "depth"
+            path = paths.depth_npz_dir / f"{int(frame_id):06d}.npz"
+        else:
+            raise KeyError(kind)
+        if not path.exists() or not _frame_has_generated_kind(paths, int(frame_id), source_kind):
+            raise FileNotFoundError(f"Generated {source_kind} evidence npz does not exist for frame {frame_id}: {path}")
+        return path
+
     def _run_job(self, frames: list[ViewEvidenceFrame], config: ViewEvidenceConfig, paths: ViewEvidenceRunPaths) -> None:
         try:
             _write_json(paths.config, config.to_json())
@@ -315,30 +346,49 @@ class ViewEvidenceManager:
             generate_depth = "depth" in config.targets
 
             for index, frame in enumerate(frames):
+                progress_count = _target_progress_count(paths, frames, config.targets)
                 self._update_job(
                     paths,
                     currentFrameId=int(frame.frame_id),
-                    completedFrameCount=int(index),
-                    message=f"Preparing {_target_label(config.targets)} for frame {frame.frame_id} ({index + 1}/{len(frames)}).",
+                    completedFrameCount=int(progress_count),
+                    message=(
+                        f"Preparing {_target_label(config.targets)} for frame {frame.frame_id} "
+                        f"({progress_count}/{len(frames)} valid frames)."
+                    ),
                 )
-                image = Image.open(frame.image_path).convert("RGB")
-                if image.size != (frame.width, frame.height):
-                    image = image.resize((frame.width, frame.height), Image.Resampling.LANCZOS)
+                output_size = (int(frame.width), int(frame.height))
 
                 metadata_path = paths.metadata_dir / f"{frame.frame_id:06d}.json"
                 frame_payload = _read_frame_metadata(metadata_path, frame)
+                frame_payload["outputWidth"] = int(output_size[0])
+                frame_payload["outputHeight"] = int(output_size[1])
+                normal_existing = bool(generate_normal and not config.overwrite and _frame_has_generated_kind(paths, int(frame.frame_id), "normal"))
+                depth_existing = bool(generate_depth and not config.overwrite and _frame_has_generated_kind(paths, int(frame.frame_id), "depth"))
+                needs_image = bool((generate_normal and not normal_existing) or (generate_depth and not depth_existing))
+                image: Image.Image | None = None
+                if needs_image:
+                    image = Image.open(frame.inference_image_path).convert("RGB")
+                    inference_size = image.size
+                    frame_payload["editorImagePath"] = str(frame.image_path)
+                    frame_payload["inferenceImagePath"] = str(frame.inference_image_path)
+                    frame_payload["inferenceWidth"] = int(inference_size[0])
+                    frame_payload["inferenceHeight"] = int(inference_size[1])
 
                 normal_rgb: np.ndarray | None = None
-                if generate_normal:
+                if generate_normal and not normal_existing:
+                    if image is None:
+                        image = Image.open(frame.inference_image_path).convert("RGB")
                     stable_normal = stable_normal or StableNormalPredictor(config)
-                    normal_rgb, normal_meta = stable_normal.predict(image)
+                    normal_rgb, normal_valid, normal_meta = stable_normal.predict(image)
                     if normal_rgb is not None:
-                        normal_rgb = resize_rgb(normal_rgb, (frame.width, frame.height))
+                        normal_rgb = resize_rgb(normal_rgb, output_size)
+                        normal_valid = resize_depth(normal_valid.astype(np.float32), output_size) >= 0.5
                         normal = decode_normal_rgb(normal_rgb)
                         Image.fromarray(normal_rgb, mode="RGB").save(paths.normal_dir / f"{frame.frame_id:06d}.png")
                         np.savez_compressed(
                             paths.normal_npz_dir / f"{frame.frame_id:06d}.npz",
                             normal=normal.astype(np.float16, copy=False),
+                            valid_mask=normal_valid,
                         )
                         Image.fromarray(normal_edge_rgb(normal), mode="RGB").save(
                             paths.normal_edge_dir / f"{frame.frame_id:06d}.png"
@@ -355,11 +405,13 @@ class ViewEvidenceManager:
                         )
 
                 depth_m: np.ndarray | None = None
-                if generate_depth:
+                if generate_depth and not depth_existing:
+                    if image is None:
+                        image = Image.open(frame.inference_image_path).convert("RGB")
                     depth_anything = depth_anything or DepthAnythingPredictor(config)
                     depth_m, depth_meta = depth_anything.predict(image)
                     if depth_m is not None:
-                        depth_m = resize_depth(depth_m, (frame.width, frame.height))
+                        depth_m = resize_depth(depth_m, output_size)
                         valid = np.isfinite(depth_m) & (depth_m > 0)
                         depth_view_rgb = depth_rgb(depth_m, valid)
                         depth_edge_view_rgb = depth_edge_rgb(depth_m, valid)
@@ -384,14 +436,16 @@ class ViewEvidenceManager:
                 frame_payload["updatedUtc"] = _now()
                 _write_json(metadata_path, frame_payload)
                 frame_rows.append(frame_payload)
+                progress_count = _target_progress_count(paths, frames, config.targets)
                 self._update_job(
                     paths,
                     currentFrameId=int(frame.frame_id),
-                    completedFrameCount=int(index + 1),
+                    completedFrameCount=int(progress_count),
                     message=(
                         f"Frame {frame.frame_id}: "
                         f"normal={'generated' if normal_rgb is not None else 'kept'}, "
-                        f"depth={'generated' if depth_m is not None else 'kept'}."
+                        f"depth={'generated' if depth_m is not None else 'kept'} "
+                        f"({progress_count}/{len(frames)} valid frames)."
                     ),
                 )
 
@@ -432,11 +486,11 @@ class ViewEvidenceManager:
             _write_json(paths.summary, summary)
             self._update_job(
                 paths,
-                ready=True,
+                ready=_targets_ready(paths, frames, config.targets),
                 running=False,
                 failed=False,
                 currentFrameId=None,
-                completedFrameCount=int(len(frames)),
+                completedFrameCount=int(_target_progress_count(paths, frames, config.targets)),
                 normalFrameCount=int(normal_count),
                 depthFrameCount=int(depth_count),
                 message=f"View evidence ready: {normal_count} normal frames, {depth_count} depth frames.",
@@ -525,5 +579,5 @@ class ViewEvidenceManager:
             "targets": list(config.targets),
             "normalSource": config.normal_source,
             "depthSource": config.depth_source,
+            "inferenceImagePolicy": "Use the staged manifest frame resolution so normal/depth evidence aligns exactly with SAM2 proposals, prompted masks, propagation masks, and selected pixels. Full-resolution evidence requires a full-resolution staged manifest.",
         }
-

@@ -27,12 +27,34 @@ function drawFrameLayers(camera, layout, view) {
     ctx.fillRect(0, 0, camera.width, camera.height);
   }
   if (
-    state.showProposals &&
+    state.proposalLayerOverlayImage &&
+    state.proposalLayerOverlayImage.size
+  ) {
+    for (const layer of proposalLayerDrawOrder(visibleProposalLayers())) {
+      const image = state.proposalLayerOverlayImage.get(layer);
+      if (image && image.complete) drawSourceImage(image, camera);
+    }
+  } else if (
     proposalReady() &&
     state.proposalOverlayImage &&
     state.proposalOverlayImage.complete
   ) {
     drawSourceImage(state.proposalOverlayImage, camera);
+  }
+  if (
+    state.showRegions &&
+    state.regionOverlayImage &&
+    state.regionOverlayImage.complete
+  ) {
+    drawSourceImage(state.regionOverlayImage, camera);
+  }
+  if (
+    state.rgbdDebugOverlayImage &&
+    state.rgbdDebugOverlayImage.complete &&
+    state.selectedFrame &&
+    Number(state.rgbdDebugFrameId) === Number(state.selectedFrame.id)
+  ) {
+    drawSourceImage(state.rgbdDebugOverlayImage, camera);
   }
   if (state.proposalSelectionOverlayImage && state.proposalSelectionOverlayImage.complete) {
     drawSourceImage(state.proposalSelectionOverlayImage, camera);
@@ -53,6 +75,32 @@ function drawPoints(camera, layout) {
     ctx.fillStyle = palette(labels[i]);
     ctx.fillRect(x, y, size, size);
   }
+}
+
+function drawEvidencePoints(layer, camera, layout) {
+  const positions = layer.positions;
+  const colors = layer.colors;
+  if (!positions.length) return;
+  const size = Math.max(1, state.pointSize * 0.72 * (window.devicePixelRatio || 1));
+  let activeColor = -1;
+  ctx.save();
+  for (let j = 0; j < positions.length; j += 3) {
+    const projected = project([positions[j], positions[j + 1], positions[j + 2]], camera);
+    if (!projected) continue;
+    const x = layout.x0 + projected.u * layout.scale;
+    const y = layout.y0 + projected.v * layout.scale;
+    if (x < -4 || x > canvas.width + 4 || y < -4 || y > canvas.height + 4) continue;
+    const colorKey = ((colors[j] >> 3) << 10) | ((colors[j + 1] >> 3) << 5) | (colors[j + 2] >> 3);
+    if (colorKey !== activeColor) {
+      const red = (((colorKey >> 10) & 31) << 3) + 4;
+      const green = (((colorKey >> 5) & 31) << 3) + 4;
+      const blue = ((colorKey & 31) << 3) + 4;
+      ctx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+      activeColor = colorKey;
+    }
+    ctx.fillRect(x, y, size, size);
+  }
+  ctx.restore();
 }
 
 function drawSelectedPoints(camera, layout) {
@@ -103,21 +151,31 @@ function drawLassoOverlay() {
 }
 
 function drawSamPrompts(camera, layout, frameView) {
-  if (!state.selectedFrame || !state.exactFrameView || !state.samPrompts.length) return;
+  if (!state.showPromptDots) return;
+  drawPromptDots(state.samPrompts, camera, layout, frameView, 6, "sam");
+}
+
+function drawRgbdCuePrompts(camera, layout, frameView) {
+  if (!state.showPromptDots) return;
+  drawPromptDots(state.rgbdCuePrompts, camera, layout, frameView, 7, "rgbd");
+}
+
+function drawPromptDots(prompts, camera, layout, frameView, radius, kind) {
+  if (!state.selectedFrame || !state.exactFrameView || !prompts.length) return;
   const dpr = window.devicePixelRatio || 1;
   ctx.save();
   ctx.lineWidth = Math.max(1.5, dpr);
-  for (const prompt of state.samPrompts) {
+  for (const prompt of prompts) {
     if (prompt.frameId !== state.selectedFrame.id) continue;
     const display = sourceToDisplay(state.selectedFrame, prompt.sourceX, prompt.sourceY);
     const point = displayToCanvasPoint(display.u, display.v, camera, layout, frameView);
-    const promptRadius = 6 * dpr;
+    const promptRadius = radius * dpr;
 
     ctx.beginPath();
     ctx.arc(point.x, point.y, promptRadius, 0, Math.PI * 2);
     ctx.fillStyle = prompt.label > 0 ? "rgba(69, 255, 159, 0.94)" : "rgba(255, 86, 94, 0.94)";
     ctx.fill();
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.9)";
+    ctx.strokeStyle = kind === "rgbd" ? "rgba(255, 255, 255, 0.92)" : "rgba(0, 0, 0, 0.9)";
     ctx.lineWidth = Math.max(1.5, dpr);
     ctx.stroke();
   }
@@ -140,25 +198,56 @@ function render() {
     ? ensureFrameView(state.camera, state.selectedFrame.id)
     : null;
   drawFrameLayers(state.camera, layout, frameView);
+  for (const layer of Object.values(state.evidencePointClouds)) {
+    if (layer.visible) drawEvidencePoints(layer, camera, layout);
+  }
   if (state.showPointCloud) {
     drawPoints(camera, layout);
     drawSelectedPoints(camera, layout);
   }
   drawSamPrompts(state.camera, layout, frameView);
+  drawRgbdCuePrompts(state.camera, layout, frameView);
   drawLassoOverlay();
 
-  const frameText = state.selectedFrame
-    ? `Frame ${state.selectedFrame.id} | ${state.selectedFrame.imageName}${state.exactFrameView ? "" : " | RGB hidden until aligned"}`
-    : "Free orbit";
-  const transitionText = state.transition ? " | moving to frame" : "";
-  const zoomText = frameView ? ` | view zoom ${frameView.zoom.toFixed(2)}x` : "";
-  const backgroundText = state.frameBackgroundMode && state.frameBackgroundMode !== "rgb"
-    ? ` | background ${state.frameBackgroundMode}`
+  const activeSamPromptCount = state.selectedFrame
+    ? state.samPrompts.filter((prompt) => Number(prompt.frameId) === Number(state.selectedFrame.id)).length
+    : 0;
+  const activeRgbdClickCount = state.selectedFrame
+    ? state.rgbdCuePrompts.filter((prompt) => Number(prompt.frameId) === Number(state.selectedFrame.id)).length
+    : 0;
+  const shortFrameName = state.selectedFrame
+    ? String(state.selectedFrame.imageName || "").replace(/\.[^.]+$/, "")
     : "";
-  const samText = state.samPrompts.length ? ` | SAM prompts ${state.samPrompts.length}` : "";
-  const maskText = state.selectionOps.length ? ` | selected pixels ${state.selectionOps.length} op${state.selectionOps.length === 1 ? "" : "s"}` : "";
-  const pointText = state.showPointCloud ? "" : " | points hidden";
-  hud.textContent = `${frameText}${transitionText}${zoomText}${backgroundText}${samText}${maskText}${pointText} | mode ${state.tool} | left-drag pan/select | right-drag rotate | wheel zoom`;
+  const viewState = state.transition ? "moving" : state.exactFrameView ? "aligned" : "3D";
+  const items = state.selectedFrame
+    ? [`F${state.selectedFrame.id}`, shortFrameName, viewState]
+    : ["3D orbit"];
+  if (frameView) items.push(`${frameView.zoom.toFixed(2)}x`);
+  if (state.frameBackgroundMode && state.frameBackgroundMode !== "rgb") items.push(state.frameBackgroundMode);
+  if (activeSamPromptCount) items.push(`SAM ${activeSamPromptCount}`);
+  if (activeRgbdClickCount) items.push(`RGB-D ${activeRgbdClickCount}`);
+  if (state.selectionOps.length) items.push(`${state.selectionOps.length} sel op${state.selectionOps.length === 1 ? "" : "s"}`);
+  if (!state.showPointCloud) items.push("points off");
+  for (const [sourceId, layer] of Object.entries(state.evidencePointClouds)) {
+    if (!layer.visible) continue;
+    const sourceName = layer.displayName || (sourceId === "colmap"
+      ? "COLMAP"
+      : sourceId === "feedforward"
+        ? "Init"
+        : sourceId === "omegaFinal"
+          ? "Optimized"
+          : "SAI3D");
+    const mode = sourceId.startsWith("segmentation3d:")
+      ? ""
+      : layer.mode === "cleaned"
+        ? "clean"
+        : layer.mode;
+    items.push(`${sourceName}${mode ? ` ${mode}` : ""} ${formatCount(layer.positions.length / 3)}`);
+  }
+  hud.textContent = items.filter(Boolean).join(" | ");
+  hud.title = state.selectedFrame
+    ? `Frame ${state.selectedFrame.id}: ${state.selectedFrame.imageName || ""}`
+    : "3D orbit";
 }
 
 function panCamera(deltaX, deltaY) {

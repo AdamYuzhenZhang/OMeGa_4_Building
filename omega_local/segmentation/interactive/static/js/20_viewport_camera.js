@@ -201,6 +201,9 @@ function frameTarget(camera) {
 async function loadFrameProposalLayers(frameId) {
   await loadProposalFrameInfo(frameId);
   await loadActiveProposalOverlay(frameId);
+  if (typeof loadActiveRegionOverlay === "function") {
+    await loadActiveRegionOverlay(frameId);
+  }
   await loadProposalSelectionOverlay();
 }
 
@@ -245,12 +248,19 @@ function focusFrame(frame) {
     resetSamState();
     state.proposalOverlayImage = null;
     state.proposalFrameInfo = null;
+    state.regionOverlayImage = null;
+    state.regionFrameInfo = null;
     state.selectedProposalIds.clear();
     state.activeProposalId = 0;
     state.selectionOps = [];
     state.proposalSelectionOverlayImage = null;
     state.selectionPreviewArea = 0;
     state.selectionPreviewCoverage = 0;
+    if (typeof resetRgbdCuePrompts === "function") {
+      resetRgbdCuePrompts();
+    } else if (typeof resetRgbdCueDebug === "function") {
+      resetRgbdCueDebug();
+    }
     syncSamControls();
     syncSelectionOperationControls();
     syncMaskEditControls();
@@ -303,6 +313,8 @@ function tickTransition(time) {
     state.exactFrameView = true;
     state.transition = null;
     markActiveFrame();
+    syncMaskEditControls();
+    if (typeof syncRgbdCueDebugControls === "function") syncRgbdCueDebugControls();
     render();
     return;
   }

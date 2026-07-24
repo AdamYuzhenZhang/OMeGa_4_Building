@@ -52,6 +52,17 @@ def _targets_ready(paths: ViewEvidenceRunPaths, frames: list[ViewEvidenceFrame],
     return bool(frames)
 
 
+def _target_progress_count(paths: ViewEvidenceRunPaths, frames: list[ViewEvidenceFrame], targets: tuple[str, ...]) -> int:
+    counts: list[int] = []
+    if "normal" in targets:
+        counts.append(_count_generated_kind(paths, frames, "normal"))
+    if "depth" in targets:
+        counts.append(_count_generated_kind(paths, frames, "depth"))
+    if not counts:
+        return 0
+    return min(counts) if len(counts) > 1 else counts[0]
+
+
 def _clear_target_outputs(paths: ViewEvidenceRunPaths, targets: tuple[str, ...]) -> None:
     dirs: list[Path] = []
     if "normal" in targets:
@@ -89,14 +100,18 @@ def _read_frame_metadata(path: Path, frame: ViewEvidenceFrame) -> dict[str, Any]
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, separators=(",", ":")) + "\n")
+    temporary.replace(path)
 
 
 def _now() -> str:
@@ -114,72 +129,6 @@ def _slug_token(value: str) -> str:
             out.append("_")
             last = True
     return "".join(out).strip("_") or "view_evidence"
-
-
-def _adopt_legacy_evidence_run(paths: ViewEvidenceRunPaths, run_name: str) -> None:
-    """Move one pre-canonical evidence cache into the editor-owned folder."""
-
-    if paths.summary.exists() or not paths.run_dir.exists():
-        return
-    try:
-        candidates = [
-            child
-            for child in paths.run_dir.iterdir()
-            if child.is_dir() and child.name.startswith("view_evidence_") and (child / "summary.json").exists()
-        ]
-    except OSError:
-        return
-    if len(candidates) != 1:
-        return
-
-    legacy_dir = candidates[0]
-    try:
-        legacy_items = list(legacy_dir.iterdir())
-    except OSError:
-        return
-    for item in legacy_items:
-        if (paths.run_dir / item.name).exists():
-            return
-
-    for item in legacy_items:
-        item.rename(paths.run_dir / item.name)
-    try:
-        legacy_dir.rmdir()
-    except OSError:
-        pass
-
-    _patch_adopted_json(paths.summary, run_name, paths)
-    _patch_adopted_json(paths.progress, run_name, paths)
-    _patch_adopted_json(paths.config, run_name, paths)
-
-
-def _patch_adopted_json(path: Path, run_name: str, paths: ViewEvidenceRunPaths) -> None:
-    if not path.exists():
-        return
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
-    if not isinstance(payload, dict):
-        return
-    payload["runName"] = run_name
-    payload["runDir"] = str(paths.run_dir)
-    if path == paths.summary:
-        payload["outputs"] = {
-            "normalDir": str(paths.normal_dir),
-            "normalNpzDir": str(paths.normal_npz_dir),
-            "normalEdgeDir": str(paths.normal_edge_dir),
-            "depthDir": str(paths.depth_dir),
-            "depthNpzDir": str(paths.depth_npz_dir),
-            "depthEdgeDir": str(paths.depth_edge_dir),
-            "metadataDir": str(paths.metadata_dir),
-            "frameIndex": str(paths.frame_index),
-        }
-    if path == paths.progress:
-        payload["summaryPath"] = str(paths.summary)
-        payload.setdefault("ready", paths.summary.exists())
-        payload.setdefault("running", False)
-    _write_json(path, payload)
 
 
 def _count_existing(metadata_dir: Path, frames: list[ViewEvidenceFrame]) -> int:
@@ -209,7 +158,7 @@ def _evidence_kind_status(
         current_frame_id = active_job.get("currentFrameId")
     else:
         completed = count
-        message = str(payload.get("message") or _default_kind_message(kind, count, total, ready, failed))
+        message = _default_kind_message(kind, count, total, ready, failed)
         updated = payload.get("updatedUtc")
         current_frame_id = payload.get("currentFrameId")
     return {
@@ -271,6 +220,24 @@ def _count_generated_kind(paths: ViewEvidenceRunPaths, frames: list[ViewEvidence
 
 
 def _frame_has_generated_kind(paths: ViewEvidenceRunPaths, frame_id: int, kind: str) -> bool:
+    stem = f"{int(frame_id):06d}"
+    if kind == "normal":
+        required_files = [
+            paths.normal_dir / f"{stem}.png",
+            paths.normal_npz_dir / f"{stem}.npz",
+            paths.normal_edge_dir / f"{stem}.png",
+        ]
+    elif kind == "depth":
+        required_files = [
+            paths.depth_dir / f"{stem}.png",
+            paths.depth_npz_dir / f"{stem}.npz",
+            paths.depth_edge_dir / f"{stem}.png",
+        ]
+    else:
+        return False
+    if any(not path.exists() for path in required_files):
+        return False
+
     metadata_path = paths.metadata_dir / f"{int(frame_id):06d}.json"
     if not metadata_path.exists():
         return False
@@ -282,6 +249,8 @@ def _frame_has_generated_kind(paths: ViewEvidenceRunPaths, frame_id: int, kind: 
         return False
     source = payload.get("normalSource") if kind == "normal" else payload.get("depthSource")
     if not isinstance(source, dict):
+        return False
+    if source.get("qualityPreset") not in {"interactive_prepare_quality_v1", "interactive_phase3_quality_v2"}:
         return False
     method = str(source.get("method", "")).strip().lower()
     if kind == "normal":

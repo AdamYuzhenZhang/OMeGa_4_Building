@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import sys
+import threading
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ class Sam2Session:
         self.device: Any | None = None
         self.amp_context: Any = nullcontext()
         self.current_frame_id: int | None = None
+        self._lock = threading.RLock()
 
     def _ensure_loaded(self) -> None:
         if self.predictor is not None:
@@ -77,28 +79,54 @@ class Sam2Session:
         points_xy: np.ndarray,
         point_labels: np.ndarray,
         multimask: bool,
+        mask_threshold: float = 0.0,
     ) -> tuple[np.ndarray, float]:
-        if points_xy.size == 0:
-            raise ValueError("SAM2 needs at least one prompt point.")
-        self.set_image(frame_id, image_rgb)
-        assert self.predictor is not None
-        masks, scores, _logits = self.predictor.predict(
-            point_coords=points_xy.astype(np.float32, copy=False),
-            point_labels=point_labels.astype(np.int32, copy=False),
-            multimask_output=bool(multimask),
+        masks_arr, scores_arr = self.predict_candidates(
+            frame_id=frame_id,
+            image_rgb=image_rgb,
+            points_xy=points_xy,
+            point_labels=point_labels,
+            multimask=multimask,
         )
-        masks_arr = np.asarray(masks)
-        scores_arr = np.asarray(scores, dtype=np.float32).reshape(-1)
+        threshold = float(mask_threshold)
+        if not np.isfinite(threshold):
+            threshold = 0.0
         if masks_arr.ndim == 2:
-            mask = masks_arr.astype(bool, copy=False)
+            mask = masks_arr > threshold
             score = float(scores_arr[0]) if scores_arr.size else 0.0
         elif masks_arr.ndim == 3:
             best = int(np.argmax(scores_arr)) if scores_arr.size else 0
-            mask = masks_arr[best].astype(bool, copy=False)
+            mask = masks_arr[best] > threshold
             score = float(scores_arr[best]) if scores_arr.size else 0.0
         else:
             raise ValueError(f"Unexpected SAM2 mask shape: {masks_arr.shape}")
         return mask, score
+
+    def predict_candidates(
+        self,
+        *,
+        frame_id: int,
+        image_rgb: np.ndarray,
+        points_xy: np.ndarray,
+        point_labels: np.ndarray,
+        multimask: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return full-resolution SAM2 mask logits and predicted IoU scores."""
+
+        if points_xy.size == 0:
+            raise ValueError("SAM2 needs at least one prompt point.")
+        with self._lock:
+            self.set_image(frame_id, image_rgb)
+            assert self.predictor is not None
+            masks, scores, _unused_logits = self.predictor.predict(
+                point_coords=points_xy.astype(np.float32, copy=False),
+                point_labels=point_labels.astype(np.int32, copy=False),
+                multimask_output=bool(multimask),
+                return_logits=True,
+            )
+            masks_arr = np.asarray(masks, dtype=np.float32)
+            scores_arr = np.asarray(scores, dtype=np.float32).reshape(-1)
+        return masks_arr, scores_arr
 
 
 def encode_mask_overlay(mask: np.ndarray) -> str:

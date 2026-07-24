@@ -42,15 +42,7 @@ def depth_rgb(depth_m: np.ndarray, valid: np.ndarray) -> np.ndarray:
         return rgb
     lo, hi = np.percentile(depth[valid], [2.0, 98.0])
     t = np.clip((depth - float(lo)) / max(float(hi - lo), 1e-6), 0.0, 1.0)
-    near = np.array([246, 214, 105], dtype=np.float32)
-    mid = np.array([95, 187, 198], dtype=np.float32)
-    far = np.array([38, 74, 139], dtype=np.float32)
-    low = t <= 0.5
-    a0 = np.clip(t / 0.5, 0, 1)[..., None]
-    a1 = np.clip((t - 0.5) / 0.5, 0, 1)[..., None]
-    out = np.empty_like(rgb, dtype=np.float32)
-    out[low] = near * (1 - a0[low]) + mid * a0[low]
-    out[~low] = mid * (1 - a1[~low]) + far * a1[~low]
+    out = color_ramp_rgb(t, _DEPTH_RAMP)
     rgb[valid] = np.clip(out[valid], 0, 255).astype(np.uint8)
     return rgb
 
@@ -75,3 +67,30 @@ def scalar_gray_rgb(values: np.ndarray) -> np.ndarray:
     scale = max(scale, 1e-6)
     gray = np.clip(values / scale, 0.0, 1.0)
     return np.repeat(np.rint(gray * 255.0).astype(np.uint8)[..., None], 3, axis=-1)
+
+
+def color_ramp_rgb(values: np.ndarray, ramp: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    x = np.clip(values, 0.0, 1.0).reshape(-1)
+    stops = ramp[:, 0]
+    colors = ramp[:, 1:]
+    channels = [np.interp(x, stops, colors[:, channel]) for channel in range(3)]
+    return np.stack(channels, axis=-1).reshape(values.shape + (3,)).astype(np.float32, copy=False)
+
+
+# Near depth is warm and far depth is cool/dark. The extra color stops make
+# small depth changes easier to see than the old yellow-blue blend.
+_DEPTH_RAMP = np.array(
+    [
+        [0.00, 255, 244, 188],
+        [0.10, 255, 187,  88],
+        [0.22, 231,  87,  54],
+        [0.34, 184,  56, 138],
+        [0.48,  92,  82, 190],
+        [0.62,  43, 134, 211],
+        [0.76,  46, 189, 181],
+        [0.90,  40, 103, 139],
+        [1.00,  24,  34,  74],
+    ],
+    dtype=np.float32,
+)

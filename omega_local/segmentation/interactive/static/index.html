@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Segmentation Editor</title>
-    <link rel="stylesheet" href="/static/css/00_base_toolbar.css?v=20260630-phase-cleanup" />
-    <link rel="stylesheet" href="/static/css/20_viewer_modal.css?v=20260630-phase-cleanup" />
-    <link rel="stylesheet" href="/static/css/30_id_panel.css?v=20260630-phase-cleanup" />
-    <link rel="stylesheet" href="/static/css/40_edit_panel.css?v=20260630-phase-cleanup" />
-    <link rel="stylesheet" href="/static/css/50_filmstrip.css?v=20260630-phase-cleanup" />
-    <link rel="stylesheet" href="/static/css/90_responsive.css?v=20260630-phase-cleanup" />
+    <link rel="stylesheet" href="/static/css/00_base_toolbar.css?v=20260708-propagation-counts" />
+    <link rel="stylesheet" href="/static/css/20_viewer_modal.css?v=20260708-propagation-counts" />
+    <link rel="stylesheet" href="/static/css/30_id_panel.css?v=20260708-propagation-counts" />
+    <link rel="stylesheet" href="/static/css/40_edit_panel.css?v=20260721-colmap-dense-stage-2" />
+    <link rel="stylesheet" href="/static/css/50_filmstrip.css?v=20260708-propagation-counts" />
+    <link rel="stylesheet" href="/static/css/90_responsive.css?v=20260708-propagation-counts" />
   </head>
   <body>
     <div class="app">
@@ -43,6 +43,7 @@
                 <option value="rgb">RGB</option>
                 <option value="normal">Normal</option>
                 <option value="depth">Depth</option>
+                <option value="dinov3">DINOv3 PCA</option>
                 <option value="normal-edges">Normal Edges</option>
                 <option value="depth-edges">Depth Edges</option>
               </select>
@@ -51,6 +52,7 @@
               <input id="rotateFrames" type="checkbox" checked />
               <span>Portrait</span>
             </label>
+            <button id="exportPreview" type="button" title="Download the current canvas view as a JPEG.">Save JPG</button>
           </div>
 
         </div>
@@ -59,16 +61,7 @@
       <main class="viewer-shell">
         <canvas id="viewer"></canvas>
         <aside id="idPanel" class="id-panel" aria-label="Proposal edits and segment IDs">
-          <div class="id-panel-header">
-            <span>Proposal Edits</span>
-            <div class="id-panel-meta">
-              <span id="idPanelSummary">Loading</span>
-              <div class="proposal-sort" aria-label="Proposal sort mode">
-                <button class="proposal-sort-button active" type="button" data-proposal-sort="index">Index</button>
-                <button class="proposal-sort-button" type="button" data-proposal-sort="pixels">Pixels</button>
-              </div>
-            </div>
-          </div>
+          <div id="regionList" class="region-list"></div>
           <div id="idList" class="id-list"></div>
         </aside>
         <aside id="editPanel" class="edit-panel" aria-label="Interactive segmentation pipeline">
@@ -81,14 +74,141 @@
               <div class="step-head">
                 <span class="step-index">1</span>
                 <div>
-                  <div class="section-title">Raw Point Cloud</div>
-                  <div id="pointCloudStatus" class="step-status">Loading</div>
+                  <div class="section-title">Prepare Data</div>
+                  <div id="viewEvidenceStatus" class="step-status">Evidence not loaded</div>
                 </div>
               </div>
-              <label class="control checkbox panel-toggle">
-                <input id="showPointCloud" type="checkbox" checked />
-                <span>Show point cloud</span>
-              </label>
+              <div class="prep-grid">
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Point Clouds</span>
+                    <span class="step-status">Aligned 3D</span>
+                  </div>
+                  <div class="point-source-group">
+                    <div class="point-source-group-title">Editor Input</div>
+                    <label class="control checkbox point-source-row">
+                      <input id="showPointCloud" type="checkbox" checked />
+                      <span class="point-source-name">Input Samples</span>
+                      <span id="pointCloudStatus" class="step-status">Loading</span>
+                    </label>
+                  </div>
+                  <div class="point-source-group">
+                    <div class="point-source-group-title">COLMAP Reconstruction</div>
+                    <label class="control checkbox point-source-row">
+                      <input id="showColmapPointCloud" type="checkbox" />
+                      <span class="point-source-name">Sparse Points</span>
+                      <span id="colmapPointCloudStatus" class="step-status">Checking</span>
+                    </label>
+                    <label class="control checkbox point-source-row point-source-derived">
+                      <input id="useCleanedColmap" type="checkbox" />
+                      <span class="point-source-name">SOR Filtered</span>
+                      <span id="cleanedColmapPointCloudStatus" class="step-status">20-NN / 2 SD</span>
+                    </label>
+                    <label class="control checkbox point-source-row point-source-derived">
+                      <input id="useSegmentedColmap" type="checkbox" />
+                      <span class="point-source-name">Region Labels</span>
+                      <span id="segmentedColmapPointCloudStatus" class="step-status">Run COLMAP Tracks</span>
+                    </label>
+                  </div>
+                  <div class="point-source-group">
+                    <div class="point-source-group-title">OMeGa Initialization</div>
+                    <label class="control checkbox point-source-row">
+                      <input id="showFeedforwardPointCloud" type="checkbox" />
+                      <span class="point-source-name">Initializer Points</span>
+                      <span id="feedforwardPointCloudStatus" class="step-status">Checking</span>
+                    </label>
+                    <label class="control checkbox point-source-row point-source-derived">
+                      <input id="useSegmentedFeedforward" type="checkbox" />
+                      <span class="point-source-name">Region Labels</span>
+                      <span id="segmentedFeedforwardPointCloudStatus" class="step-status">Run Init Projection</span>
+                    </label>
+                  </div>
+                  <div class="point-source-group">
+                    <div class="point-source-group-title">OMeGa Optimized Mesh</div>
+                    <label class="control checkbox point-source-row">
+                      <input id="showOmegaFinalPointCloud" type="checkbox" />
+                      <span class="point-source-name">Mesh Vertices</span>
+                      <span id="omegaFinalPointCloudStatus" class="step-status">Checking</span>
+                    </label>
+                    <label class="control checkbox point-source-row point-source-derived">
+                      <input id="useHybridOmegaFinal" type="checkbox" />
+                      <span class="point-source-name">Clean Hybrid</span>
+                      <span id="hybridOmegaFinalPointCloudStatus" class="step-status">Vertices + fill</span>
+                    </label>
+                    <label class="control checkbox point-source-row point-source-derived">
+                      <input id="useSegmentedOmegaFinal" type="checkbox" />
+                      <span class="point-source-name">Projected Regions</span>
+                      <span id="segmentedOmegaFinalPointCloudStatus" class="step-status">Run Final Projection</span>
+                    </label>
+                    <div class="point-result-group point-source-derived">
+                      <div class="point-result-head">
+                        <span>SAI3D Results</span>
+                        <span id="segmentation3dResultSummary" class="step-status">No saved runs</span>
+                      </div>
+                      <div id="segmentation3dResults" class="point-result-list">
+                        <span class="point-result-empty">Run SAI3D in Step 6</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>StableNormal</span>
+                    <span id="normalEvidenceStatus" class="step-status">Not generated</span>
+                  </div>
+                  <div class="prep-settings">
+                    <label>
+                      <span>Scene</span>
+                      <select id="stableNormalDataType">
+                        <option value="outdoor" selected>Outdoor</option>
+                        <option value="indoor">Indoor</option>
+                        <option value="object">Object</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>StableNormal</span>
+                      <select id="stableNormalVariant">
+                        <option value="stable" selected>Stable</option>
+                        <option value="turbo">Turbo</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="prep-actions">
+                    <button id="generateNormalEvidence" type="button">Generate</button>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Depth Anything V2</span>
+                    <span id="depthEvidenceStatus" class="step-status">Not generated</span>
+                  </div>
+                  <div class="prep-settings single">
+                    <label>
+                      <span>Depth model</span>
+                      <select id="depthAnythingModel">
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf" selected>Outdoor Large</option>
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf">Outdoor Base</option>
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf">Outdoor Small</option>
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Indoor-Large-hf">Indoor Large</option>
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Indoor-Base-hf">Indoor Base</option>
+                        <option value="depth-anything/Depth-Anything-V2-Metric-Indoor-Small-hf">Indoor Small</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="prep-actions">
+                    <button id="generateDepthEvidence" type="button">Generate</button>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>DINOv3</span>
+                    <span id="dinoEvidenceStatus" class="step-status">Not generated</span>
+                  </div>
+                  <div class="prep-actions">
+                    <button id="generateDinoEvidence" type="button">Generate</button>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <section class="pipeline-step proposal-group">
@@ -107,10 +227,6 @@
                 <button id="regenerateProposals" type="button" disabled>Regenerate</button>
               </div>
               <div id="keyframeStatus" class="step-status keyframe-status">Keyframes not detected</div>
-              <label class="control checkbox panel-toggle">
-                <input id="showProposals" type="checkbox" />
-                <span>Show proposal overlay</span>
-              </label>
             </section>
 
             <section class="pipeline-step">
@@ -123,46 +239,80 @@
               </div>
               <div class="mask-edit-summary">
                 <span id="selectedProposalStatus">No selected region</span>
-                <span id="pendingMaskStatus">Proposal updates save immediately</span>
               </div>
-              <div class="evidence-box">
-                <div class="evidence-head">
-                  <span>View Evidence</span>
-                  <span id="viewEvidenceStatus" class="step-status">Not generated</span>
-                </div>
-                <div class="evidence-action-list">
-                  <div class="evidence-action-row">
-                    <div>
-                      <span>StableNormal</span>
-                      <small id="normalEvidenceStatus">Normal evidence</small>
-                    </div>
-                    <button id="generateNormalEvidence" type="button">Generate</button>
-                  </div>
-                  <div class="evidence-action-row">
-                    <div>
-                      <span>Depth Anything V2</span>
-                      <small id="depthEvidenceStatus">Depth evidence</small>
-                    </div>
-                    <button id="generateDepthEvidence" type="button">Generate</button>
-                  </div>
-                </div>
-              </div>
+              <details class="proposal-layer-controls" aria-label="Visible proposal layers">
+                <summary class="proposal-layer-title">
+                  <span>Visible Layers</span>
+                  <span id="proposalLayerSummary" class="proposal-layer-summary">None visible</span>
+                </summary>
+                <div id="proposalLayerOptions" class="proposal-layer-options"></div>
+              </details>
               <div class="panel-tool-row" aria-label="Mask edit mode">
                 <button class="tool-button" type="button" data-tool="mask-pick">Pick</button>
                 <button class="tool-button" type="button" data-tool="mask-lasso">Lasso</button>
                 <button class="tool-button" type="button" data-tool="sam2">SAM2</button>
               </div>
+              <div class="panel-tool-row geometry-tool-row" aria-label="Geometry-aware mask edit mode">
+                <button class="tool-button" type="button" data-tool="normal-grow">Normal Grow</button>
+                <button class="tool-button" type="button" data-tool="rgbd-cue-select">RGB-D Cue</button>
+              </div>
+              <div class="method-control-panel" data-method-controls="sam2" aria-label="SAM2 parameters" hidden>
+                <label class="grow-slider">
+                  <span>
+                    <span>SAM2 Size</span>
+                    <output id="sam2SizeValue">0.00</output>
+                  </span>
+                  <input id="sam2Size" type="range" min="-2.00" max="2.00" step="0.05" value="0.00" />
+                </label>
+              </div>
+              <div class="method-control-panel" data-method-controls="normal-grow" aria-label="Normal Grow parameters" hidden>
+                <label class="grow-slider">
+                  <span>
+                    <span>Normal Angle</span>
+                    <output id="normalGrowAngleValue">14°</output>
+                  </span>
+                  <input id="normalGrowAngle" type="range" min="2" max="45" step="1" value="14" />
+                </label>
+              </div>
+              <div class="method-control-panel" data-method-controls="rgbd-cue-select" aria-label="RGB-D Cue parameters" hidden>
+                <label class="grow-slider">
+                  <span>
+                    <span>Smoothness</span>
+                    <output id="depthGrowEdgeValue">0.10</output>
+                  </span>
+                  <input id="depthGrowEdge" type="range" min="0.02" max="0.50" step="0.01" value="0.10" />
+                </label>
+                <label class="grow-slider">
+                  <span>
+                    <span>Superpixels</span>
+                    <output id="rgbdCueSuperpixelsValue">800</output>
+                  </span>
+                  <input id="rgbdCueSuperpixels" type="range" min="400" max="2400" step="100" value="800" />
+                </label>
+                <div class="rgbd-debug-controls" aria-label="RGB-D cue debug overlays">
+                  <button id="runRgbdCueDebug" type="button">RGB-D Debug</button>
+                  <select id="rgbdCueDebugSelect" disabled>
+                    <option value="">No debug overlay</option>
+                  </select>
+                </div>
+              </div>
               <div class="operation-row" aria-label="Selection operation">
                 <span>Operation</span>
                 <button class="operation-button add" type="button" data-selection-operation="add" title="Add to selection. Shift temporarily enables this.">+</button>
                 <button class="operation-button subtract" type="button" data-selection-operation="subtract" title="Subtract from selection. Option/Alt temporarily enables this.">-</button>
-                <span id="selectionOperationStatus">Replace by default</span>
               </div>
-              <div class="panel-actions">
-                <button id="runSam2" type="button" disabled>Run SAM2</button>
-                <button id="clearSam2" type="button" disabled>Clear Prompts</button>
-                <button id="clearProposalSelection" type="button" disabled>Cancel</button>
-                <button id="updateProposal" type="button" disabled>Update Proposal</button>
+              <div class="selection-option-row" aria-label="Selection display and protection options">
+                <label class="control checkbox prompt-toggle">
+                  <input id="showPromptDots" type="checkbox" checked />
+                  <span>Show prompts</span>
+                </label>
+                <label class="control checkbox region-lock-toggle" title="Exclude pixels already assigned to persistent regions from the selected pixel mask.">
+                  <input id="lockRegionSelection" type="checkbox" />
+                  <span>Lock regions</span>
+                </label>
+              </div>
+              <div class="selection-actions">
+                <button id="clearProposalSelection" type="button" disabled>Clear</button>
               </div>
             </section>
 
@@ -170,50 +320,141 @@
               <div class="step-head">
                 <span class="step-index">4</span>
                 <div>
-                  <div class="section-title">Propagation Test</div>
-                  <div id="propagationStatus" class="step-status">Compare nearby frames</div>
+                  <div class="section-title">Persistent Regions</div>
+                  <div id="regionStatus" class="step-status">No persistent regions</div>
                 </div>
               </div>
-              <label class="target-control">
-                <span>Neighbors</span>
-                <input id="propagationNeighbors" type="number" min="1" max="8" step="1" value="2" inputmode="numeric" />
-              </label>
-              <div class="panel-actions">
-                <button id="runPropagation" type="button" disabled>Run SAM2 Video</button>
+              <div id="regionSuggestionCard" class="region-suggestion-card" hidden>
+                <div class="region-suggestion-head">
+                  <span id="regionSuggestionSwatch" class="selected-region-swatch"></span>
+                  <span class="region-suggestion-main">
+                    <span class="region-suggestion-kicker">Propagated from</span>
+                    <strong id="regionSuggestionTitle">Region name</strong>
+                    <span id="regionSuggestionMeta">Select a propagated proposal to see its source.</span>
+                  </span>
+                  <button id="useSuggestedRegion" type="button" disabled>Accept Source</button>
+                </div>
+                <div id="regionSuggestionReferenceStrip" class="region-reference-strip compact" hidden></div>
               </div>
-              <p class="panel-note">Temporary result only. It compares propagation against current SAM2 proposal overlays.</p>
+              <div id="selectedRegionCard" class="selected-region-card" hidden>
+                <div class="selected-region-head">
+                  <span id="selectedRegionSwatch" class="selected-region-swatch"></span>
+                  <span class="selected-region-main">
+                    <strong id="selectedRegionTitle">No region selected</strong>
+                    <span id="selectedRegionMeta">Select a region from the left panel.</span>
+                  </span>
+                  <button id="closeActiveRegion" class="selected-region-close" type="button" title="Close selected region">Close</button>
+                </div>
+                <div class="selected-region-actions">
+                  <button id="clearRegionFrame" class="danger-action" type="button" disabled>Clear Frame</button>
+                  <button id="deleteRegion" class="danger-action strong-danger" type="button" disabled>Delete All</button>
+                </div>
+                <div id="regionReferenceStrip" class="region-reference-strip" hidden></div>
+              </div>
+              <div class="region-edit-grid">
+                <label class="target-control region-name-control">
+                  <span id="regionNameLabel">Name</span>
+                  <input id="regionName" type="text" maxlength="80" placeholder="region name" />
+                  <button id="renameRegion" type="button" disabled hidden>Rename</button>
+                </label>
+                <label class="control checkbox panel-toggle">
+                  <input id="showRegions" type="checkbox" />
+                  <span>Show region overlay</span>
+                </label>
+                <label class="control checkbox panel-toggle" title="Use this frame as a complete propagation anchor after all visible persistent regions are labeled.">
+                  <input id="frameComplete" type="checkbox" />
+                  <span>Frame complete</span>
+                </label>
+              </div>
+              <div class="region-commit-actions">
+                <div class="region-action-row">
+                  <button id="createRegionFromSelection" class="primary-action" type="button" disabled>New Region</button>
+                  <button id="assignSelectionToRegion" type="button" disabled>Assign to Region</button>
+                </div>
+                <div class="region-action-row">
+                  <button id="addSelectionToRegion" type="button" disabled>Add Pixels</button>
+                  <button id="clearSelectionFromRegions" class="danger-action" type="button" disabled>Subtract Pixels</button>
+                </div>
+              </div>
             </section>
 
             <section class="pipeline-step">
               <div class="step-head">
                 <span class="step-index">5</span>
                 <div>
-                  <div class="section-title">3D Labels</div>
-                  <div class="step-status">Selection to object IDs</div>
+                  <div class="section-title">Propagate Regions</div>
+                  <div id="propagationStatus" class="step-status">No propagated layer loaded</div>
                 </div>
               </div>
-              <button id="clearSelection" type="button" disabled>Clear Selection</button>
-              <label class="target-control">
-                <span>Target ID</span>
-                <input id="targetLabel" type="number" min="1" step="1" inputmode="numeric" />
-              </label>
-              <div class="panel-actions">
-                <button id="assignSelection" type="button" title="Relabel only the selected points to the target ID." disabled>Assign</button>
-                <button id="extractSelection" type="button" title="Relabel only the selected points to a new ID." disabled>Extract New</button>
-                <button id="mergeSelectedIds" type="button" title="Merge whole selected IDs into the target ID." disabled>Merge IDs</button>
+              <div class="propagation-stage-row">
+                <div class="propagation-stage-title">Propagation</div>
+                <div class="panel-actions propagation-stage-controls">
+                  <select id="propagationMethod" title="Choose an anchor-to-mask method."></select>
+                  <button id="runPropagation" class="primary-action" type="button" disabled>Run</button>
+                  <button id="openPropagationPreview" type="button" disabled>Preview</button>
+                </div>
+              </div>
+              <div class="propagation-stage-row">
+                <div class="propagation-stage-title">Geometry Pass</div>
+                <div class="panel-actions propagation-stage-controls">
+                  <select id="sourceRefinementMethod" title="Choose a geometry-based dense recovery or mask identity pass."></select>
+                  <button id="runSourceRefinement" class="primary-action" type="button" disabled>Run</button>
+                  <button id="openSourceRefinementPreview" type="button" disabled>Preview</button>
+                </div>
+              </div>
+              <div class="propagation-stage-row">
+                <div class="propagation-stage-title">Pair Test</div>
+                <div class="panel-actions propagation-stage-controls">
+                  <select id="regionPairMethod" title="Choose a focused source-to-target transfer method."></select>
+                  <button
+                    id="testRegionPair"
+                    type="button"
+                    title="Transfer the selected persistent region from its first manual occurrence into the open target frame, without cross-source merging."
+                    disabled
+                  >Test Pair</button>
+                </div>
               </div>
             </section>
 
-            <section class="pipeline-step save-group">
+            <section class="pipeline-step">
               <div class="step-head">
                 <span class="step-index">6</span>
                 <div>
-                  <div class="section-title">Save Edits</div>
-                  <div id="pendingEditStatus" class="step-status pending-status">Saved</div>
+                  <div class="section-title">3D Segmentation</div>
+                  <div id="segmentation3dStatus" class="step-status">No experiment run</div>
                 </div>
               </div>
-              <button id="saveEdits" type="button" disabled>Save</button>
+              <div class="segmentation3d-grid">
+                <label>
+                  <span>Method</span>
+                  <select id="segmentation3dMethod"></select>
+                </label>
+                <label>
+                  <span>2D evidence</span>
+                  <select id="segmentation3dInput"></select>
+                </label>
+                <label id="segmentation3dSourceField" hidden>
+                  <span>Propagation</span>
+                  <select id="segmentation3dSource"></select>
+                </label>
+                <label id="segmentation3dManualWeightField" hidden>
+                  <span>Manual weight</span>
+                  <select id="segmentation3dManualWeight"></select>
+                </label>
+                <label>
+                  <span>Point budget</span>
+                  <select id="segmentation3dPointBudget"></select>
+                </label>
+                <label>
+                  <span>Superpoints</span>
+                  <select id="segmentation3dSuperpoints"></select>
+                </label>
+              </div>
+              <div class="panel-actions segmentation3d-actions">
+                <button id="runSegmentation3d" class="primary-action" type="button" disabled>Run SAI3D</button>
+              </div>
             </section>
+
           </div>
         </aside>
         <div id="cursorBadge" class="cursor-badge" hidden></div>
@@ -222,14 +463,14 @@
           <section class="comparison-modal" aria-label="Propagation comparison">
             <div class="comparison-modal-header">
               <div>
-                <div class="section-title">SAM2 Video Propagation Test</div>
+                <div class="section-title">Region Propagation Preview</div>
                 <div id="propagationModalSummary" class="step-status">No result</div>
               </div>
               <button id="closePropagationModal" type="button">Close</button>
             </div>
             <div class="comparison-legend">
-              <span>Top: propagated edited mask</span>
-              <span>Bottom: current SAM2 proposals</span>
+              <span id="propagationLegendTop">Top: propagated selected mask</span>
+              <span id="propagationLegendBottom">Bottom: current SAM2 proposals</span>
             </div>
             <div id="propagationResults" class="comparison-grid"></div>
           </section>
@@ -240,16 +481,23 @@
         <div id="filmstrip" class="filmstrip"></div>
       </footer>
     </div>
-    <script src="/static/js/00_state_api_math.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/10_labels_and_panels.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/20_viewport_camera.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/30_phase12_controls.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/35_phase12_services.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/40_phase3_selection_preview.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/41_phase3_tools_and_sam.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/45_propagation_preview.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/50_rendering_navigation.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/60_point_label_edits.js?v=20260630-phase-cleanup"></script>
-    <script src="/static/js/90_events_bootstrap.js?v=20260630-phase-cleanup"></script>
+    <script src="/static/js/00_state_api_math.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/10_labels_and_panels.js?v=20260720-propagation-registry"></script>
+    <script src="/static/js/20_viewport_camera.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/30_phase12_controls.js?v=20260721-dinov3-evidence"></script>
+    <script src="/static/js/32_point_cloud_sources.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/35_phase12_services.js?v=20260720-propagation-registry"></script>
+    <script src="/static/js/39_phase3_tool_controls.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/40_phase3_selection_preview.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/41_phase3_selection_common.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/42_phase3_point_and_proposal_tools.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/43_phase3_sam2_selection.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/44_phase3_geometry_selection.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/46_propagation_preview.js?v=20260722-omega-final-points"></script>
+    <script src="/static/js/47_persistent_regions.js?v=20260721-vggts-pair-test"></script>
+    <script src="/static/js/50_rendering_navigation.js?v=20260722-sai3d-result-list"></script>
+    <script src="/static/js/54_segmentation3d.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/55_export_preview.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/90_events_bootstrap.js?v=20260723-clean-hybrid"></script>
   </body>
 </html>
