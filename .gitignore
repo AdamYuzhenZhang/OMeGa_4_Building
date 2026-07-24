@@ -121,15 +121,32 @@ venv.bak/
 compile_commands.json
 *.dump
 
-data
-results
-renders
-output
-wandb
+# Generated datasets, experiment outputs, and model artifacts.
+data/
+output/
+outputs/
+results/
+renders/
+logs/
+tmp/
+checkpoints/
+weights/
+wandb/
 
 !examples/benchmarks/compression/results/
 
 *.ply
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pkl
+*.pickle
+*.h5
+*.hdf5
 # custom
 work_dirs
 examples/simple_trainer_2dgs_.py
