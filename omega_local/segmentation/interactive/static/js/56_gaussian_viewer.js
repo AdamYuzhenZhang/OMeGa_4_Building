@@ -20,12 +20,14 @@ function gaussianArtifact(runId, variantId) {
 function gaussianArtifactContentUrl(runId, variantId, contentVersion = "") {
   const base = `/api/3d-segmentation/runs/${encodeURIComponent(runId)}` +
     `/gaussians/${encodeURIComponent(variantId)}.ply`;
-  return contentVersion ? `${base}?v=${encodeURIComponent(contentVersion)}` : base;
+  return datasetUrl(contentVersion ? `${base}?v=${encodeURIComponent(contentVersion)}` : base);
 }
 
 function gaussianSceneManifestUrl(runId, variantId) {
-  return `/api/3d-segmentation/runs/${encodeURIComponent(runId)}` +
-    `/gaussian-scenes/${encodeURIComponent(variantId)}.json`;
+  return datasetUrl(
+    `/api/3d-segmentation/runs/${encodeURIComponent(runId)}` +
+    `/gaussian-scenes/${encodeURIComponent(variantId)}.json`
+  );
 }
 
 function gaussianSceneKey(scene) {
@@ -127,7 +129,8 @@ async function activateGaussianViewport(runId, variantId) {
     gaussianViewportFrame.setAttribute("aria-busy", "true");
     gaussianViewportFrame.src = "/static/splat_embed.html" +
       `?scene=${encodeURIComponent(gaussianSceneManifestUrl(runId, variantId))}` +
-      `&settings=${encodeURIComponent(GAUSSIAN_VIEWER_SETTINGS_URL)}` +
+      `&settings=${encodeURIComponent(datasetUrl(GAUSSIAN_VIEWER_SETTINGS_URL))}` +
+      `&datasetId=${encodeURIComponent(activeDatasetId())}` +
       `&session=${encodeURIComponent(gaussianViewportSessionId)}`;
   } else {
     sendGaussianViewportCamera();

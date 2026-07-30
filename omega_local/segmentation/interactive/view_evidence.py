@@ -511,6 +511,7 @@ class ViewEvidenceManager:
                         "updatedUtc": _now(),
                     },
                 )
+            paths.progress.unlink(missing_ok=True)
         except Exception as exc:  # pragma: no cover - surfaced through UI status
             for target in config.targets:
                 count = _count_generated_kind(paths, frames, target)

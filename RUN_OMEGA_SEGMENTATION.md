@@ -555,12 +555,11 @@ $V2SAM_ROOT/weights/fusion_ego2exo_full.pth
 $VGGT_S_ROOT/official_ckpts/main_exp.pth
 ```
 
-Launch the current 1024-grid editor:
+Launch the multi-dataset editor:
 
 ```bash
 $PYTHON "$OMEGA_BUILDING_ROOT/scripts/run_omega_segmentation_editor.py" \
-  --model-dir "$OMEGA_RESULT_DIR" \
-  --baseline-name sai3d_area_samples_1024_dense \
+  --dataset-registry "$OMEGA_BUILDING_ROOT/configs/local/interactive_segmentation_datasets.json" \
   --host 0.0.0.0 \
   --port 8787 \
   --max-points 180000 \
@@ -579,6 +578,37 @@ $PYTHON "$OMEGA_BUILDING_ROOT/scripts/run_omega_segmentation_editor.py" \
   --cutie-size 480 \
   --memory-vos-device cuda
 ```
+
+Use the dataset selector beside **Segmentation Editor** to switch between the
+Grove DSLR run and `sssaligned01soft_native`. Dataset state is isolated:
+
+```text
+Grove:
+$OMEGA_RESULT_DIR/segmentation/baselines/sai3d_area_samples_1024_dense/interactive/
+
+SSS native COLMAP:
+$DT_ROOT/data/360_data/sssaligned01soft_native/segmentation/baselines/colmap_native/interactive/
+```
+
+Every web-app `Generate`, `Run`, and `Regenerate` request carries the selected
+dataset ID explicitly. Background work keeps the concrete dataset state that
+created it, so switching the browser while a job runs cannot redirect its
+outputs. Each output root contains `dataset.json` with its dataset ID, staged
+inputs, and canonical output directory. The registry rejects two entries that
+resolve to the same interactive output directory.
+
+`--active-dataset grove_entrance_dslr` or
+`--active-dataset sssaligned01soft_native` sets the initial project for a new
+browser session. The toolbar remains the normal way to switch. Standalone
+Split&Splat and reconstruction commands later in this file are path-explicit;
+they do not read the browser selection and currently target Grove unless their
+model and baseline arguments are changed deliberately.
+
+The SSS adapter references the original RGB files without copying them and
+stages its manifest, OpenCV camera poses, and point clouds beside that
+interactive directory. It includes the 1,000 square cubemap views, orders each
+camera stream numerically, and defaults `Portrait` off. The 200 nonsquare
+`cam_phone` frames are excluded by the `squareImagesOnly` dataset profile.
 
 Step 1 can display the aligned RGB COLMAP sparse cloud. `Cleaned (SOR)` switches
 between the immutable raw cache and the derived Open3D `20`-neighbor,
@@ -699,12 +729,19 @@ interactive/proposals/propagation/vggts_pair/
 interactive/view_evidence/dinov3_vitl16_768/
 ```
 
-Each method directory contains `input.json`, `config.json`, `progress.json`,
+Each completed method directory contains `input.json`, `config.json`,
 `summary.json`, `frames.jsonl`, and matching `label_maps/`, `overlays/`, and
 `metadata/` directories. A full propagation becomes stale whenever its manual
 anchor maps change; source-dependent recovery and SAI3D inputs reject that
 result until it is regenerated. Focused source-target pair diagnostics remain
 independent because they are not complete dataset layers.
+
+`progress.json` exists only while a web-launched proposal, evidence, or
+propagation job is running, and is retained on failure/interruption for recovery.
+Successful runs remove it after writing and validating `summary.json`. Reusable
+evidence/features, masks, point caches, logs, and final 3D results are deliberate
+outputs and are not deleted. Temporary backend work uses
+`interactive/tmp/` context directories that are removed automatically.
 
 `COLMAP Tracks` automatically uses the retained original DSLR SfM model under
 the sibling `grove_entrance_dslr_0521` capture. It rejects the OMeGa seed model

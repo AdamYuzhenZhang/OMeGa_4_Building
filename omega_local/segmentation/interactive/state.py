@@ -47,6 +47,10 @@ class EditorState:
         propagation_backends: PropagationBackendRegistry,
         dinov3_evidence: DinoV3EvidenceManager,
         segmentation3d: Segmentation3DManager,
+        dataset_id: str = "",
+        dataset_name: str = "",
+        dataset_kind: str = "omega",
+        default_rotate_frames: bool = True,
     ) -> None:
         self.paths = paths
         self.max_points = max(int(max_points), 1)
@@ -64,6 +68,11 @@ class EditorState:
         self.dinov3_evidence = dinov3_evidence
         self.segmentation3d = segmentation3d
         self.point_cloud_sources = PointCloudSourceManager(paths)
+        self.dataset_id = str(dataset_id or paths.model_dir.name)
+        self.dataset_name = str(dataset_name or self.dataset_id)
+        self.dataset_kind = str(dataset_kind)
+        self.default_rotate_frames = bool(default_rotate_frames)
+        self._write_dataset_manifest()
         self._manifest_rows: list[dict[str, Any]] | None = None
         self._manifest_by_frame_id: dict[int, dict[str, Any]] | None = None
         self._points_full: np.ndarray | None = None
@@ -85,6 +94,12 @@ class EditorState:
             "policy": "Interactive proposals, prompts, propagation outputs, StableNormal, Depth Anything, and DINOv3 PCA evidence use the staged frame grid.",
         }
         return {
+            "dataset": {
+                "datasetId": self.dataset_id,
+                "name": self.dataset_name,
+                "kind": self.dataset_kind,
+                "defaultRotateFrames": self.default_rotate_frames,
+            },
             "modelDir": str(self.paths.model_dir),
             "baselineName": self.paths.baseline_name,
             "baselineDir": str(self.paths.baseline_dir),
@@ -107,6 +122,27 @@ class EditorState:
             "propagation": self.propagation_backends.status(),
             "segmentation3d": self.segmentation3d.status(),
         }
+
+    def _write_dataset_manifest(self) -> None:
+        path = self.paths.interactive_dir / "dataset.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schemaVersion": 1,
+            "datasetId": self.dataset_id,
+            "name": self.dataset_name,
+            "kind": self.dataset_kind,
+            "modelDir": str(self.paths.model_dir),
+            "baselineName": self.paths.baseline_name,
+            "baselineDir": str(self.paths.baseline_dir),
+            "datasetDir": str(self.paths.dataset_dir),
+            "frameManifest": str(self.paths.frame_manifest),
+            "pointsPath": str(self.paths.points_path),
+            "interactiveOutputDir": str(self.paths.interactive_dir),
+            "outputPolicy": "all editor-generated data remains below interactiveOutputDir",
+        }
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
 
     def segmentation3d_status(self) -> dict[str, Any]:
         return self.segmentation3d.status()
@@ -183,7 +219,9 @@ class EditorState:
                         "cx": float(row["cx"]),
                         "cy": float(row["cy"]),
                         "poseWorldFromCamera": pose.reshape(-1).tolist(),
-                        "imageUrl": f"/api/frame/{frame_id}/image",
+                        "imageUrl": (
+                            f"/api/frame/{frame_id}/image?datasetId={self.dataset_id}"
+                        ),
                     }
                 )
             self._frames = frames
@@ -200,10 +238,10 @@ class EditorState:
     def image_path(self, frame_id: int) -> Path:
         row = self.manifest_row(frame_id)
         staged = self.paths.dataset_dir / str(row["colorPath"])
-        if staged.exists():
+        if staged.is_file():
             return staged
         source = Path(str(row.get("sourceImagePath", "")))
-        if source.exists():
+        if source.is_file():
             return source
         raise FileNotFoundError(f"No RGB image found for frame {frame_id}")
 
@@ -818,6 +856,9 @@ class EditorState:
             self.proposals.save_propagation_progress(
                 str(snapshot["methodId"]),
                 _propagation_progress_payload(snapshot),
+            )
+            self.proposals.propagation_paths(str(snapshot["methodId"])).progress.unlink(
+                missing_ok=True
             )
 
     def propagate_regions(self, payload: dict[str, Any], progress_callback=None) -> dict[str, Any]:

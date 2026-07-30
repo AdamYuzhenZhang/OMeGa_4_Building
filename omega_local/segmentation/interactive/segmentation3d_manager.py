@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -76,6 +77,11 @@ class Segmentation3DManager:
         self.seed = int(seed)
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._cleanup_completed_job_files()
+
+    def _cleanup_completed_job_files(self) -> None:
+        for experiment in (self.root / "runs").glob("*/experiment.json"):
+            (experiment.parent / "job.json").unlink(missing_ok=True)
 
     def status(self) -> dict[str, Any]:
         registry = self.registry.status()
@@ -164,7 +170,8 @@ class Segmentation3DManager:
         with self._lock:
             if any(existing.get("running") for existing in self._jobs.values()):
                 raise RuntimeError("Another 3D segmentation experiment is already running.")
-            (run_dir / "experiment.json").unlink(missing_ok=True)
+            if run_dir.exists():
+                shutil.rmtree(run_dir)
             self._jobs[job_id] = job
         thread = threading.Thread(
             target=self._run,
@@ -427,7 +434,7 @@ class Segmentation3DManager:
                 }
             )
             snapshot = dict(self._jobs[job_id])
-        _write_json(request.run_dir / "job.json", snapshot)
+        (request.run_dir / "job.json").unlink(missing_ok=True)
 
     def _saved_runs(
         self,

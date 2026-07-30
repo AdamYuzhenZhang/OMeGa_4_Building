@@ -693,6 +693,7 @@ class ProposalManager:
                 currentFrameId=None,
                 message="SAM2 proposals ready.",
             )
+            paths.progress.unlink(missing_ok=True)
         except Exception as exc:  # pragma: no cover - surfaced through UI status
             self._update_job(
                 paths,

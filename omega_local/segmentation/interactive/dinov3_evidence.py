@@ -135,6 +135,7 @@ class DinoV3EvidenceManager:
                 "message": "Starting DINOv3 evidence generation.",
                 "updatedUtc": _now(),
             }
+        self.progress_path.unlink(missing_ok=True)
         thread = threading.Thread(target=self._run, args=(frames, manifest_path), daemon=True)
         thread.start()
         return self.status(frames)
@@ -204,6 +205,7 @@ class DinoV3EvidenceManager:
                 "message": "DINOv3 evidence ready.",
                 "updatedUtc": _now(),
             }
+        self.progress_path.unlink(missing_ok=True)
 
     def _validate(self) -> None:
         requirements = (

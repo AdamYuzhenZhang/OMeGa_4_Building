@@ -60,7 +60,7 @@ function proposalOverlayStamp() {
 
 function proposalOverlayUrl(frameId) {
   const stamp = proposalOverlayStamp();
-  return `/api/proposals/sam2/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`;
+  return datasetUrl(`/api/proposals/sam2/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`);
 }
 
 function proposalLayerStatus(layer) {
@@ -86,7 +86,7 @@ function proposalLayerStamp(layer) {
 function proposalLayerOverlayUrl(frameId, layer) {
   const key = normalizeProposalLayer(layer);
   const stamp = proposalLayerStamp(key);
-  return `/api/proposals/layers/${key}/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`;
+  return datasetUrl(`/api/proposals/layers/${key}/frame/${frameId}/overlay?v=${encodeURIComponent(stamp)}`);
 }
 
 function visibleProposalLayers() {
@@ -309,7 +309,7 @@ function viewEvidenceStamp() {
 
 function viewEvidenceImageUrl(frameId, mode = state.frameBackgroundMode) {
   const stamp = viewEvidenceStamp();
-  return `/api/view-evidence/frame/${frameId}/${mode}?v=${encodeURIComponent(stamp)}`;
+  return datasetUrl(`/api/view-evidence/frame/${frameId}/${mode}?v=${encodeURIComponent(stamp)}`);
 }
 
 function keyframeRowsByFrame() {

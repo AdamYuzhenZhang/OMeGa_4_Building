@@ -3,6 +3,7 @@ const canvas = document.getElementById("viewer");
 const ctx = canvas.getContext("2d", { alpha: true });
 const gaussianViewportFrame = document.getElementById("gaussianViewport");
 const statusEl = document.getElementById("projectStatus");
+const datasetSelect = document.getElementById("datasetSelect");
 const hud = document.getElementById("viewerHud");
 const filmstrip = document.getElementById("filmstrip");
 const resetButton = document.getElementById("resetView");
@@ -129,6 +130,8 @@ const omegaFinalPointCloudStatusEl = document.getElementById("omegaFinalPointClo
 const segmentedOmegaFinalPointCloudStatusEl = document.getElementById("segmentedOmegaFinalPointCloudStatus");
 
 const state = {
+  datasetRegistry: null,
+  datasetSwitching: false,
   project: null,
   frames: [],
   positions: new Float32Array(),
@@ -401,16 +404,36 @@ function clearSelectionBusy(label = "") {
   syncSelectionBusyUi();
 }
 
+function activeDatasetId() {
+  return String(
+    (state.project && state.project.dataset && state.project.dataset.datasetId) ||
+    (state.datasetRegistry && state.datasetRegistry.activeDatasetId) ||
+    ""
+  );
+}
+
+function datasetUrl(url) {
+  const value = String(url || "");
+  if (!value.startsWith("/api/") || value.startsWith("/api/datasets")) return value;
+  const datasetId = activeDatasetId();
+  if (!datasetId) return value;
+  const parsed = new URL(value, window.location.origin);
+  parsed.searchParams.set("datasetId", datasetId);
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 async function loadJson(url) {
-  const response = await fetch(url, { cache: "no-store" });
+  const requestUrl = datasetUrl(url);
+  const response = await fetch(requestUrl, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`${url}: ${response.status} ${response.statusText}`);
+    throw new Error(`${requestUrl}: ${response.status} ${response.statusText}`);
   }
   return response.json();
 }
 
 async function postJson(url, payload) {
-  const response = await fetch(url, {
+  const requestUrl = datasetUrl(url);
+  const response = await fetch(requestUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -423,7 +446,7 @@ async function postJson(url, payload) {
     } catch (_error) {
       // Keep the HTTP status if the server does not return JSON.
     }
-    throw new Error(`${url}: ${detail}`);
+    throw new Error(`${requestUrl}: ${detail}`);
   }
   return response.json();
 }

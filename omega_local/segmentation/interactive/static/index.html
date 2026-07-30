@@ -8,14 +8,20 @@
     <link rel="stylesheet" href="/static/css/20_viewer.css?v=20260727-inplace-splats" />
     <link rel="stylesheet" href="/static/css/30_id_panel.css?v=20260730-gaussian-color-switch-1" />
     <link rel="stylesheet" href="/static/css/40_edit_panel.css?v=20260729-mapanything-live" />
-    <link rel="stylesheet" href="/static/css/50_filmstrip.css?v=20260708-propagation-counts" />
+    <link rel="stylesheet" href="/static/css/50_filmstrip.css?v=20260730-frame-aspect-1" />
     <link rel="stylesheet" href="/static/css/90_responsive.css?v=20260708-propagation-counts" />
   </head>
   <body>
     <div class="app">
       <header class="toolbar">
         <div class="brand">
-          <span class="brand-title">Segmentation Editor</span>
+          <div class="brand-row">
+            <span class="brand-title">Segmentation Editor</span>
+            <label class="dataset-control">
+              <span class="sr-only">Dataset</span>
+              <select id="datasetSelect" aria-label="Active dataset"></select>
+            </label>
+          </div>
           <span id="projectStatus" class="status">Loading</span>
         </div>
         <div class="controls">
@@ -507,10 +513,10 @@
         <div id="filmstrip" class="filmstrip"></div>
       </footer>
     </div>
-    <script src="/static/js/00_state_api_math.js?v=20260730-gaussian-color-switch-1"></script>
+    <script src="/static/js/00_state_api_math.js?v=20260730-dataset-assets-1"></script>
     <script src="/static/js/10_labels_and_panels.js?v=20260729-gaussian-parts"></script>
     <script src="/static/js/20_viewport_camera.js?v=20260716-memory-vos"></script>
-    <script src="/static/js/30_phase12_controls.js?v=20260728-split-splat-explorer"></script>
+    <script src="/static/js/30_phase12_controls.js?v=20260730-dataset-assets-1"></script>
     <script src="/static/js/32_point_cloud_sources.js?v=20260727-inplace-splats"></script>
     <script src="/static/js/35_phase12_services.js?v=20260720-propagation-registry"></script>
     <script src="/static/js/39_phase3_tool_controls.js?v=20260716-memory-vos"></script>
@@ -519,15 +525,15 @@
     <script src="/static/js/42_phase3_point_and_proposal_tools.js?v=20260716-memory-vos"></script>
     <script src="/static/js/43_phase3_sam2_selection.js?v=20260716-memory-vos"></script>
     <script src="/static/js/44_phase3_geometry_selection.js?v=20260716-memory-vos"></script>
-    <script src="/static/js/46_propagation_preview.js?v=20260722-omega-final-points"></script>
-    <script src="/static/js/47_persistent_regions.js?v=20260721-vggts-pair-test"></script>
-    <script src="/static/js/50_rendering_navigation.js?v=20260727-inplace-splats"></script>
+    <script src="/static/js/46_propagation_preview.js?v=20260730-dataset-assets-1"></script>
+    <script src="/static/js/47_persistent_regions.js?v=20260730-dataset-assets-1"></script>
+    <script src="/static/js/50_rendering_navigation.js?v=20260730-landscape-orbit-1"></script>
     <script src="/static/js/54_segmentation3d.js?v=20260730-split-splat-cleanup-1"></script>
     <script src="/static/js/59_split_splat_results.js?v=20260730-split-splat-cleanup-1"></script>
     <script src="/static/js/60_mapanything_results.js?v=20260730-split-splat-cleanup-1"></script>
-    <script src="/static/js/56_gaussian_viewer.js?v=20260730-gaussian-color-switch-1"></script>
+    <script src="/static/js/56_gaussian_viewer.js?v=20260730-dataset-assets-1"></script>
     <script src="/static/js/58_gaussian_parts_panel.js?v=20260730-gaussian-color-switch-1"></script>
     <script src="/static/js/55_export_preview.js?v=20260716-memory-vos"></script>
-    <script src="/static/js/90_events_bootstrap.js?v=20260727-inplace-splats"></script>
+    <script src="/static/js/90_events_bootstrap.js?v=20260730-frame-aspect-1"></script>
   </body>
 </html>

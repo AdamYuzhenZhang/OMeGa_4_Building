@@ -66,13 +66,26 @@ class SAI3DExperimentBackend:
     @property
     def info(self) -> Segmentation3DMethodInfo:
         root = self.config.sai3d_root.expanduser().resolve()
-        available = (root / "sai3d_base.py").is_file() and (root / "helpers" / "sai3d_utils.py").is_file()
+        source_ready = (root / "sai3d_base.py").is_file() and (root / "helpers" / "sai3d_utils.py").is_file()
+        geometry_ready = (
+            self.config.paths.omega_final_hybrid_points.is_file()
+            or self.config.paths.omega_final_mesh_source.is_file()
+        )
+        available = source_ready and geometry_ready
+        if not source_ready:
+            availability_message = f"SAI3D source is incomplete: {root}"
+        elif not geometry_ready:
+            availability_message = (
+                "This SAI3D adapter requires an OMeGa optimized mesh or clean-hybrid point cloud."
+            )
+        else:
+            availability_message = "Ready"
         return Segmentation3DMethodInfo(
             method_id=self.method_id,
             display_name="SAI3D",
             description="Progressive 3D superpoint grouping from multi-view 2D mask agreement.",
             available=available,
-            availability_message="Ready" if available else f"SAI3D source is incomplete: {root}",
+            availability_message=availability_message,
             geometry_source_id="omega_final_clean_hybrid",
             geometry_source_name="Clean Hybrid",
         )
@@ -318,7 +331,18 @@ class SAI3DExperimentBackend:
         rows: list[dict[str, Any]] = []
         for fallback, source in enumerate(read_jsonl(self.config.paths.frame_manifest)):
             frame_id = int(source.get("sai3dFrameId", source.get("sourceFrameId", fallback)))
-            color_path = (self.config.paths.dataset_dir / str(source["colorPath"])).resolve()
+            color_value = str(source.get("colorPath") or "").strip()
+            if color_value:
+                color_path = Path(color_value)
+                if not color_path.is_absolute():
+                    color_path = self.config.paths.dataset_dir / color_path
+            else:
+                color_path = Path(str(source.get("sourceImagePath") or ""))
+            color_path = color_path.expanduser().resolve()
+            if not color_path.is_file():
+                raise FileNotFoundError(
+                    f"SAI3D source image does not exist for frame {frame_id}: {color_path}"
+                )
             pose_path = (self.config.paths.dataset_dir / str(source["posePath"])).resolve()
             rows.append(
                 {

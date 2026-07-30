@@ -1833,17 +1833,41 @@ export PACKAGE_ROOT=$DT_ROOT/data/scan_processing_outputs/grove_entrance_dslr_05
 export OMEGA_RESULT_DIR=$PACKAGE_ROOT/omega_stable_mesh/model_baseline_stronger_30000
 ```
 
-Launch the editor on the current dense SAI3D area-sample run:
+Launch the editor with the project dataset registry:
 
 ```bash
 $PYTHON "$OMEGA_BUILDING_ROOT/scripts/run_omega_segmentation_editor.py" \
-  --model-dir "$OMEGA_RESULT_DIR" \
-  --baseline-name sai3d_area_samples_1024_dense \
+  --dataset-registry "$OMEGA_BUILDING_ROOT/configs/local/interactive_segmentation_datasets.json" \
   --host 0.0.0.0 \
   --port 8787 \
   --max-points 180000 \
   --label-source raw
 ```
+
+The toolbar dataset selector switches request-scoped editor state without
+mixing outputs. Grove remains under its OMeGa baseline, while the square native
+COLMAP capture uses:
+
+```text
+/home/yz2332/projects/digitalTwin/data/360_data/sssaligned01soft_native/
+  images/                                      # immutable source RGB
+  sparse/                                      # immutable source COLMAP model
+  segmentation/baselines/colmap_native/
+    dataset/                                   # staged manifest, poses, points
+    interactive/                               # proposals, evidence, regions, runs
+```
+
+Each `interactive/` root contains a small `dataset.json` provenance manifest.
+The registry rejects colliding output roots, and every browser API request
+carries the active dataset ID explicitly. A background job therefore remains
+bound to the dataset that started it even if the browser switches projects.
+
+The COLMAP adapter keeps source images in place, preserves exact point-ID order
+in its colored sparse PLY, and uses a track/error plus robust-distance inlier
+subset for the initial white display cloud. The SSS profile includes only its
+1,000 square views and defaults portrait rotation off; Grove continues to
+default portrait rotation on. The checkbox remains available for temporary
+per-session overrides.
 
 The editor discovers the checked-out memory propagation baselines at
 `$DT_ROOT/third_party/XMem2` and `$DT_ROOT/third_party/Cutie`. Their default
@@ -1908,7 +1932,6 @@ Raw proposal output:
 ```text
 $OMEGA_RESULT_DIR/segmentation/baselines/<baseline-name>/interactive/proposals/sam2_auto_<width>/
   config.json
-  progress.json
   summary.json
   frames.jsonl
   label_maps/
@@ -1928,7 +1951,6 @@ interactive/proposals/propagation/
   <method-id>/
     config.json
     input.json
-    progress.json
     summary.json
     frames.jsonl
     label_maps/
@@ -1946,7 +1968,9 @@ interactive/proposals/propagation/
 
 `registry.json` stores method ID, display name, availability, and label space.
 Each method directory stores the exact input packet and fingerprint, method
-configuration, live progress, and validated output. The web app reads this
+configuration, and validated output. During execution, `progress.json` records
+live state; it is removed after successful validation and retained only for a
+failed or interrupted run. The web app reads this
 registry through the layer-status API, so adding a backend does not require
 method-specific layer, runner, or preview code.
 

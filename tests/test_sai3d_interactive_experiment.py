@@ -44,9 +44,12 @@ def test_weighted_input_substitutes_completed_manual_frames_with_symlinks(tmp_pa
     propagation_masks = interactive_dir / "proposals" / "propagation" / "sam2_video" / "label_maps"
     propagation_masks.mkdir(parents=True)
     region_maps_dir.mkdir(parents=True)
+    posed_images_dir = dataset_dir / "posed_images"
+    posed_images_dir.mkdir(parents=True)
 
     rows = []
     for frame_id in range(2):
+        (posed_images_dir / f"{frame_id}.jpg").touch()
         rows.append(
             {
                 "sai3dFrameId": frame_id,

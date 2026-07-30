@@ -302,7 +302,9 @@ function rotateCamera(deltaX, deltaY) {
   }
 
   const screenUp = mul(camera.down, -1);
-  const yaw = deltaX * speed * (state.rotateFrames ? -1 : 1);
+  // Orbit direction is a screen-space interaction and must not flip when the
+  // frame image changes between landscape and portrait presentation.
+  const yaw = -deltaX * speed;
   const pitch = -deltaY * speed;
 
   eyeOffset = rotateAroundAxis(eyeOffset, screenUp, yaw);

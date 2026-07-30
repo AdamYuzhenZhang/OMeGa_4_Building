@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -16,6 +16,14 @@ from .colmap_dense_propagation import ColmapDenseConfig
 from .colmap_identity_refinement import ColmapIdentityRefinementConfig
 from .colmap_point_field import ColmapPointFieldConfig
 from .colmap_track_propagation import ColmapTrackConfig
+from .datasets import (
+    DATASET_COOKIE,
+    ActiveEditorState,
+    EditorDatasetRegistry,
+    EditorDatasetSpec,
+    load_dataset_specs,
+    single_dataset_spec,
+)
 from .dinov3_evidence import DinoV3EvidenceConfig, DinoV3EvidenceManager
 from .feedforward_point_field import FeedForwardPointFieldConfig
 from .feedforward_point_propagation import FeedForwardPointConfig
@@ -43,7 +51,7 @@ def _json_response(payload: dict[str, Any] | list[Any]) -> Response:
 
 def create_app(
     *,
-    model_dir: Path,
+    model_dir: Path | None,
     baseline_name: str,
     max_points: int,
     seed: int,
@@ -74,13 +82,47 @@ def create_app(
     feedforward_init_mesh: Path | None,
     omega_final_mesh: Path | None,
     sai3d_root: Path,
-) -> FastAPI:
+    dataset_registry_path: Path | None = None,
+    active_dataset_id: str = "",
+    _dataset_spec: EditorDatasetSpec | None = None,
+    _state_only: bool = False,
+    _sam2_session: Sam2Session | None = None,
+) -> FastAPI | EditorState:
+    registry_specs: list[EditorDatasetSpec]
+    registry_default_id: str
+    if _dataset_spec is not None:
+        dataset_spec = _dataset_spec
+        registry_specs = [dataset_spec]
+        registry_default_id = dataset_spec.dataset_id
+    elif dataset_registry_path is not None:
+        registry_specs, registry_default_id = load_dataset_specs(dataset_registry_path)
+        requested_id = str(active_dataset_id or registry_default_id)
+        spec_by_id = {spec.dataset_id: spec for spec in registry_specs}
+        if requested_id not in spec_by_id:
+            raise ValueError(f"Active editor dataset is not registered: {requested_id}")
+        dataset_spec = spec_by_id[requested_id]
+        registry_default_id = requested_id
+    else:
+        if model_dir is None:
+            raise ValueError("--model-dir is required when --dataset-registry is not set.")
+        dataset_spec = single_dataset_spec(
+            model_dir=model_dir,
+            baseline_name=baseline_name,
+            feedforward_point_cloud=feedforward_point_cloud,
+            feedforward_init_mesh=feedforward_init_mesh,
+            omega_final_mesh=omega_final_mesh,
+        )
+        registry_specs = [dataset_spec]
+        registry_default_id = dataset_spec.dataset_id
+
     paths = resolve_paths(
-        model_dir,
-        baseline_name,
-        feedforward_point_cloud=feedforward_point_cloud,
-        feedforward_init_mesh=feedforward_init_mesh,
-        omega_final_mesh=omega_final_mesh,
+        dataset_spec.model_dir,
+        dataset_spec.baseline_name,
+        colmap_model=dataset_spec.colmap_model,
+        colmap_point_cloud=dataset_spec.colmap_point_cloud,
+        feedforward_point_cloud=dataset_spec.feedforward_point_cloud,
+        feedforward_init_mesh=dataset_spec.feedforward_init_mesh,
+        omega_final_mesh=dataset_spec.omega_final_mesh,
     )
     sam2_root = require_dir(sam2_root, "SAM2 root")
     checkpoint = (
@@ -210,7 +252,7 @@ def create_app(
     omega_final_run_dir = (
         paths.interactive_dir / "proposals" / "propagation" / "omega_final_points"
     )
-    sam2_image_session = Sam2Session(sam2_runtime_config)
+    sam2_image_session = _sam2_session or Sam2Session(sam2_runtime_config)
     propagation_backends = build_default_propagation_registry(
         colmap_track_config=colmap_track_config,
         colmap_identity_config=ColmapIdentityRefinementConfig(
@@ -339,10 +381,66 @@ def create_app(
         propagation_backends=propagation_backends,
         dinov3_evidence=dinov3_evidence,
         segmentation3d=segmentation3d,
+        dataset_id=dataset_spec.dataset_id,
+        dataset_name=dataset_spec.name,
+        dataset_kind=dataset_spec.kind,
+        default_rotate_frames=dataset_spec.default_rotate_frames,
     )
+    if _state_only:
+        return state
+
+    state_entries: list[tuple[EditorDatasetSpec, EditorState]] = [(dataset_spec, state)]
+    for spec in registry_specs:
+        if spec.dataset_id == dataset_spec.dataset_id:
+            continue
+        other_state = create_app(
+            model_dir=None,
+            baseline_name=spec.baseline_name,
+            max_points=max_points,
+            seed=seed,
+            label_source=label_source,
+            sam2_root=sam2_root,
+            sam2_checkpoint=sam2_checkpoint,
+            sam2_config=sam2_config,
+            sam2_device=sam2_device,
+            xmem_root=xmem_root,
+            xmem_checkpoint=xmem_checkpoint,
+            xmem_size=xmem_size,
+            cutie_root=cutie_root,
+            cutie_checkpoint=cutie_checkpoint,
+            cutie_size=cutie_size,
+            memory_vos_device=memory_vos_device,
+            v2sam_root=v2sam_root,
+            v2sam_python=v2sam_python,
+            v2sam_profile=v2sam_profile,
+            v2sam_visual_checkpoint=v2sam_visual_checkpoint,
+            v2sam_fusion_checkpoint=v2sam_fusion_checkpoint,
+            v2sam_expert_batch_size=v2sam_expert_batch_size,
+            v2sam_device=v2sam_device,
+            vggts_root=vggts_root,
+            vggts_python=vggts_python,
+            vggts_checkpoint=vggts_checkpoint,
+            vggts_device=vggts_device,
+            feedforward_point_cloud=None,
+            feedforward_init_mesh=None,
+            omega_final_mesh=None,
+            sai3d_root=sai3d_root,
+            _dataset_spec=spec,
+            _state_only=True,
+            _sam2_session=sam2_image_session,
+        )
+        assert isinstance(other_state, EditorState)
+        state_entries.append((spec, other_state))
+
+    dataset_registry = EditorDatasetRegistry(
+        state_entries,
+        default_dataset_id=registry_default_id,
+    )
+    state = ActiveEditorState(dataset_registry)
 
     app = FastAPI(title="OMeGa Interactive Segmentation Editor")
     app.state.editor_state = state
+    app.state.dataset_registry = dataset_registry
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     supersplat_public = THIRD_PARTY_ROOT / "supersplat-viewer" / "public"
     if (supersplat_public / "index.html").is_file():
@@ -353,8 +451,16 @@ def create_app(
         )
 
     @app.middleware("http")
-    async def no_cache_editor_assets(request, call_next):
-        response = await call_next(request)
+    async def no_cache_editor_assets(request: Request, call_next):
+        requested_dataset = (
+            request.query_params.get("datasetId")
+            or request.cookies.get(DATASET_COOKIE)
+        )
+        token = dataset_registry.activate(requested_dataset)
+        try:
+            response = await call_next(request)
+        finally:
+            dataset_registry.reset(token)
         if (
             request.url.path == "/"
             or request.url.path.startswith("/static/")
@@ -366,6 +472,25 @@ def create_app(
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/api/datasets")
+    def datasets() -> Response:
+        return _json_response(dataset_registry.summary())
+
+    @app.post("/api/datasets/select")
+    def select_dataset(payload: dict[str, Any] = Body(...)) -> Response:
+        requested = str(payload.get("datasetId") or "")
+        if requested not in dataset_registry.states:
+            raise HTTPException(status_code=404, detail=f"Editor dataset not found: {requested}")
+        response = _json_response({"datasetId": requested, "reload": True})
+        response.set_cookie(
+            DATASET_COOKIE,
+            requested,
+            path="/",
+            max_age=60 * 60 * 24 * 365,
+            samesite="lax",
+        )
+        return response
 
     @app.get("/api/project")
     def project() -> Response:
@@ -697,15 +822,34 @@ def create_app(
             path = state.image_path(frame_id)
         except (KeyError, FileNotFoundError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return FileResponse(path)
+        return FileResponse(
+            path,
+            headers={"Cache-Control": "no-store", "Vary": "Cookie"},
+        )
 
     return app
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch the OMeGa interactive segmentation editor.")
-    parser.add_argument("--model-dir", type=Path, required=True)
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=None,
+        help="Single-dataset OMeGa model directory. Omit when using --dataset-registry.",
+    )
     parser.add_argument("--baseline-name", default="sai3d_area_samples_1024_dense")
+    parser.add_argument(
+        "--dataset-registry",
+        type=Path,
+        default=None,
+        help="JSON registry of independent editor datasets.",
+    )
+    parser.add_argument(
+        "--active-dataset",
+        default="",
+        help="Optional initial dataset ID from --dataset-registry.",
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--max-points", type=int, default=180000)
@@ -810,10 +954,17 @@ def main(argv: list[str] | None = None) -> int:
         feedforward_init_mesh=args.feedforward_init_mesh,
         omega_final_mesh=args.omega_final_mesh,
         sai3d_root=args.sai3d_root,
+        dataset_registry_path=args.dataset_registry,
+        active_dataset_id=str(args.active_dataset),
     )
     print(f"Interactive editor: http://{args.host}:{args.port}")
-    print(f"Model: {args.model_dir}")
-    print(f"Baseline: {args.baseline_name}")
+    if args.dataset_registry is not None:
+        registry = app.state.dataset_registry
+        print(f"Datasets: {len(registry.states)} from {args.dataset_registry}")
+        print(f"Default dataset: {registry.default_dataset_id}")
+    else:
+        print(f"Model: {args.model_dir}")
+        print(f"Baseline: {args.baseline_name}")
     uvicorn.run(app, host=args.host, port=int(args.port), log_level="info")
     return 0
 

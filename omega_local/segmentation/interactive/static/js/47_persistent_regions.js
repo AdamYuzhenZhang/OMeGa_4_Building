@@ -118,11 +118,11 @@ function regionOverlayStamp() {
 }
 
 function regionOverlayUrl(frameId) {
-  return `/api/regions/frame/${frameId}/overlay?v=${encodeURIComponent(regionOverlayStamp())}`;
+  return datasetUrl(`/api/regions/frame/${frameId}/overlay?v=${encodeURIComponent(regionOverlayStamp())}`);
 }
 
 function singleRegionOverlayUrl(frameId, regionId) {
-  return `/api/regions/frame/${frameId}/overlay/${regionId}?v=${encodeURIComponent(regionOverlayStamp())}`;
+  return datasetUrl(`/api/regions/frame/${frameId}/overlay/${regionId}?v=${encodeURIComponent(regionOverlayStamp())}`);
 }
 
 function manualRegionReferenceRows(region) {
@@ -350,7 +350,7 @@ function renderRegionReferenceStripContent(container, region, options = {}) {
     const image = document.createElement("img");
     image.loading = "lazy";
     image.alt = frame ? frame.imageName : `Frame ${row.frameId}`;
-    image.src = frame ? frame.imageUrl : `/api/frame/${row.frameId}/image`;
+    image.src = frame ? frame.imageUrl : datasetUrl(`/api/frame/${row.frameId}/image`);
     const overlay = document.createElement("img");
     overlay.loading = "lazy";
     overlay.alt = "";

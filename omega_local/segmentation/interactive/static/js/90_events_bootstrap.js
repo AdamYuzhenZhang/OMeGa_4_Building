@@ -156,9 +156,11 @@ function syncFilmstripThumbnailLayout() {
     const aspect = Math.max(0.1, Number(tile.dataset.frameAspect) || 1.5);
     const rotatedWidth = tileHeight;
     const rotatedHeight = tileHeight / aspect;
+    const displayedWidth = state.rotateFrames ? rotatedHeight : tileHeight * aspect;
     tile.style.setProperty("--rotated-thumb-width", `${rotatedWidth.toFixed(2)}px`);
     tile.style.setProperty("--rotated-thumb-height", `${rotatedHeight.toFixed(2)}px`);
-    tile.style.flexBasis = state.rotateFrames ? `${rotatedHeight.toFixed(2)}px` : "";
+    tile.style.setProperty("--thumb-card-width", `${displayedWidth.toFixed(2)}px`);
+    tile.style.flexBasis = `${displayedWidth.toFixed(2)}px`;
   }
 }
 
@@ -215,6 +217,8 @@ function buildFilmstrip() {
 
 async function initialize() {
   setStatus("Loading project");
+  state.datasetRegistry = await loadJson("/api/datasets");
+  syncDatasetSelector();
   const [project, frames, points, pointCloudSourcesStatus, labelSummary, proposalStatus, proposalLayerStatus, keyframeStatus, viewEvidenceStatus, regionStatus, segmentation3dStatus] = await Promise.all([
     loadJson("/api/project"),
     loadJson("/api/frames"),
@@ -247,7 +251,9 @@ async function initialize() {
   initializeSegmentation3dControls(segmentation3dStatus);
   state.showFrameImage = showFrameImageInput.checked;
   state.frameBackgroundMode = frameBackgroundModeInput ? frameBackgroundModeInput.value : "rgb";
-  state.rotateFrames = rotateFramesInput.checked;
+  const defaultRotateFrames = Boolean(project.dataset && project.dataset.defaultRotateFrames);
+  rotateFramesInput.checked = defaultRotateFrames;
+  state.rotateFrames = defaultRotateFrames;
   initializeProposalLayerState();
   state.propagationMethodId = String(
     proposalLayerStatus.defaultPropagationMethodId ||
@@ -267,7 +273,11 @@ async function initialize() {
   state.cueSuperpixels = rgbdCueSuperpixelsInput ? Number(rgbdCueSuperpixelsInput.value) || 800 : 800;
 
   const labelText = project.labelCount > 0 ? `${project.labelCount.toLocaleString()} ids` : "raw unsegmented";
-  setStatus(`${project.baselineName} | ${labelText} | ${project.servedPointCount.toLocaleString()} points | ${project.frameCount} frames`);
+  const datasetName = project.dataset && project.dataset.name
+    ? project.dataset.name
+    : project.baselineName;
+  document.title = `${datasetName} | Segmentation Editor`;
+  setStatus(`${datasetName} | ${labelText} | ${project.servedPointCount.toLocaleString()} points | ${project.frameCount} frames`);
   if (pointCloudStatusEl) {
     pointCloudStatusEl.textContent = `${project.servedPointCount.toLocaleString()} / ${project.pointCount.toLocaleString()} pts`;
     pointCloudStatusEl.title = `${project.labelSource || "raw"} labels | ${project.pointsPath || ""}`;
@@ -287,6 +297,39 @@ async function initialize() {
   resetView();
 }
 
+function syncDatasetSelector() {
+  if (!datasetSelect || !state.datasetRegistry) return;
+  const rows = Array.isArray(state.datasetRegistry.datasets)
+    ? state.datasetRegistry.datasets
+    : [];
+  datasetSelect.textContent = "";
+  for (const row of rows) {
+    const option = document.createElement("option");
+    option.value = String(row.datasetId || "");
+    option.textContent = String(row.name || row.datasetId || "Dataset");
+    datasetSelect.appendChild(option);
+  }
+  datasetSelect.value = String(state.datasetRegistry.activeDatasetId || "");
+  datasetSelect.disabled = state.datasetSwitching || rows.length < 2;
+}
+
+async function switchDataset(datasetId) {
+  const requested = String(datasetId || "");
+  if (!requested || state.datasetSwitching) return;
+  if (requested === String(state.datasetRegistry && state.datasetRegistry.activeDatasetId || "")) return;
+  state.datasetSwitching = true;
+  syncDatasetSelector();
+  setStatus("Switching dataset");
+  try {
+    await postJson("/api/datasets/select", { datasetId: requested });
+    window.location.reload();
+  } catch (error) {
+    state.datasetSwitching = false;
+    syncDatasetSelector();
+    throw error;
+  }
+}
+
 for (const button of toolButtons) {
   button.addEventListener("click", () => {
     setTool(button.dataset.tool || "navigate");
@@ -301,6 +344,14 @@ for (const button of selectionOperationButtons) {
   });
 }
 resetButton.addEventListener("click", resetView);
+if (datasetSelect) {
+  datasetSelect.addEventListener("change", () => {
+    switchDataset(datasetSelect.value).catch((error) => {
+      console.error(error);
+      setStatus(error.message);
+    });
+  });
+}
 if (clearSelectionButton) clearSelectionButton.addEventListener("click", clearSelection);
 detectKeyframesButton.addEventListener("click", runKeyframeDetection);
 reloadKeyframesButton.addEventListener("click", refreshKeyframeStatus);

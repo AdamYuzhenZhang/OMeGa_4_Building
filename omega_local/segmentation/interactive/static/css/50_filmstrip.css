@@ -17,7 +17,7 @@
 
 .frame-tile {
   position: relative;
-  flex: 0 0 132px;
+  flex: 0 0 var(--thumb-card-width, 132px);
   display: block;
   height: 100%;
   min-width: 0;
@@ -29,10 +29,6 @@
   background: #0d0f11;
   color: #dfe5eb;
   cursor: pointer;
-}
-
-.frame-tile.portrait {
-  flex-basis: var(--rotated-thumb-height, 72px);
 }
 
 .frame-tile:hover {

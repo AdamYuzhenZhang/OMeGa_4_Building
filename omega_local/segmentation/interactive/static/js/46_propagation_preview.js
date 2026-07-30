@@ -524,7 +524,7 @@ function updatePropagationLiveCards(job) {
         : `Frame ${frameId} | ${stateText}`;
     }
     if (isDone) {
-      const url = `/api/proposals/layers/${layer}/frame/${frameId}/overlay?v=${stamp}`;
+      const url = datasetUrl(`/api/proposals/layers/${layer}/frame/${frameId}/overlay?v=${stamp}`);
       setComparisonOverlay(entry.propagated, `${url}`, `${propagationLayerLabel(layer)} Regions`, "ready");
     } else if (isCurrent) {
       setComparisonStackStatus(entry.propagated, "Propagated: running", "running");

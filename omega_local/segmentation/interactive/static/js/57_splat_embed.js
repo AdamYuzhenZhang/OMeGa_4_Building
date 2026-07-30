@@ -12,6 +12,7 @@ const params = new URL(window.location.href).searchParams;
 const sceneUrl = params.get("scene");
 const settingsUrl = params.get("settings");
 const sessionId = params.get("session");
+const datasetId = params.get("datasetId") || "";
 
 function notify(type, payload = {}) {
   parentWindow.postMessage(
@@ -30,9 +31,13 @@ async function fetchRequired(url, label, responseType, cache = "force-cache") {
 function gaussianContentUrl(scene, part) {
   const base = `/api/3d-segmentation/runs/${encodeURIComponent(scene.runId)}` +
     `/gaussians/${encodeURIComponent(part.variantId)}.ply`;
-  return part.contentVersion
+  const versioned = part.contentVersion
     ? `${base}?v=${encodeURIComponent(part.contentVersion)}`
     : base;
+  if (!datasetId) return versioned;
+  const parsed = new URL(versioned, window.location.origin);
+  parsed.searchParams.set("datasetId", datasetId);
+  return `${parsed.pathname}${parsed.search}`;
 }
 
 async function fetchGaussian(scene, part) {

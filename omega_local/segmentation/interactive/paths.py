@@ -106,6 +106,8 @@ def resolve_paths(
     model_dir: Path,
     baseline_name: str,
     *,
+    colmap_model: Path | None = None,
+    colmap_point_cloud: Path | None = None,
     feedforward_point_cloud: Path | None = None,
     feedforward_init_mesh: Path | None = None,
     omega_final_mesh: Path | None = None,
@@ -156,7 +158,16 @@ def resolve_paths(
         if omega_final_mesh is None
         else omega_final_mesh.expanduser().resolve()
     )
-    colmap_track_model = _find_colmap_track_model(capture_root, model_dir)
+    colmap_track_model = (
+        _find_colmap_track_model(capture_root, model_dir)
+        if colmap_model is None
+        else colmap_model.expanduser().resolve()
+    )
+    resolved_colmap_points = (
+        capture_root / "pointcloud" / "colmap_sparse" / "colmap_sparse_points.ply"
+        if colmap_point_cloud is None
+        else colmap_point_cloud.expanduser().resolve()
+    )
     keyframes_dir = interactive_dir / "keyframes"
     regions_dir = interactive_dir / "regions"
     return EditorPaths(
@@ -169,7 +180,7 @@ def resolve_paths(
         points_path=points_path,
         interactive_dir=interactive_dir,
         point_clouds_dir=point_clouds_dir,
-        colmap_sparse_source=capture_root / "pointcloud" / "colmap_sparse" / "colmap_sparse_points.ply",
+        colmap_sparse_source=resolved_colmap_points,
         colmap_sparse_cache=point_clouds_dir / "colmap_sparse.npz",
         colmap_sparse_summary=point_clouds_dir / "colmap_sparse.json",
         colmap_sparse_cleaned_cache=point_clouds_dir / "colmap_sparse_cleaned.npz",

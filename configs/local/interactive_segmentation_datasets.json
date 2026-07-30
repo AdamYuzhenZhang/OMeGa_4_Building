@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "defaultDatasetId": "grove_entrance_dslr",
+  "datasets": [
+    {
+      "id": "grove_entrance_dslr",
+      "name": "Grove Entrance DSLR",
+      "kind": "omega",
+      "modelDir": "/home/yz2332/projects/digitalTwin/data/scan_processing_outputs/grove_entrance_dslr_0521_pinhole/omega_stable_mesh/model_baseline_stronger_30000",
+      "baselineName": "sai3d_area_samples_1024_dense",
+      "defaultRotateFrames": true
+    },
+    {
+      "id": "sssaligned01soft_native",
+      "name": "SSS Aligned 01 Soft",
+      "kind": "colmap",
+      "rootDir": "/home/yz2332/projects/digitalTwin/data/360_data/sssaligned01soft_native",
+      "baselineName": "colmap_native",
+      "squareImagesOnly": true,
+      "defaultRotateFrames": false
+    }
+  ]
+}
