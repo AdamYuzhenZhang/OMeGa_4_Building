@@ -23,6 +23,7 @@ from .propagation_backends import (
     PropagationBackendRegistry,
     PropagationFrame,
     build_propagation_input,
+    discover_split_splat_layer_status,
 )
 from .proposals import ProposalFrame, ProposalManager, normalize_proposal_layer
 from .regions import PersistentRegionManager
@@ -344,9 +345,24 @@ class EditorState:
         return status
 
     def proposal_layers_status(self) -> dict[str, Any]:
+        registry = self.propagation_backends.status()
+        methods = list(registry.get("methods", []))
+        known_ids = {
+            str(row.get("methodId") or "")
+            for row in methods
+            if isinstance(row, dict)
+        }
+        for row in discover_split_splat_layer_status(
+            self.paths.interactive_dir / "tmp"
+        ):
+            method_id = str(row.get("methodId") or "")
+            if method_id and method_id not in known_ids:
+                methods.append(row)
+                known_ids.add(method_id)
+        registry["methods"] = methods
         return self.proposals.layer_status(
             self.proposal_frames(),
-            self.propagation_backends.status(),
+            registry,
         )
 
     def region_status(self) -> dict[str, Any]:

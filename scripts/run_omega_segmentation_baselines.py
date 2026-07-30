@@ -47,10 +47,6 @@ def main(argv: list[str] | None = None) -> int:
         from omega_local.segmentation.sai3d_baseline import main as sai3d_main
 
         return sai3d_main(cleaned)
-    if baseline in {"split_splat", "splitandsplat", "split_and_splat"}:
-        from omega_local.segmentation.split_splat_baseline import main as split_splat_main
-
-        return split_splat_main(cleaned)
     raise SystemExit(f"Unknown segmentation baseline: {baseline}")
 
 

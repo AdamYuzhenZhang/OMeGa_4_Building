@@ -482,6 +482,7 @@ The editor UI and the research phases map as follows:
 | 4. Persistent Regions | Commit selected pixels to stable dataset-level region IDs and mark complete anchor frames | Phase 4 |
 | 5. Propagate Regions | Run parallel candidate backends, explicit geometry passes, pair tests, and sparse COLMAP labeling | Phase 5 |
 | 6. Segment in 3D | Run SAI3D over cleaned hybrid OMeGa points using automatic or anchor-weighted 2D evidence | Phase 6 |
+| 7. Reconstruct Regions | Train region-aware 3DGS, 2DGS, or OMeGa components from hard 2D anchors, soft Step 5 candidates, and Step 6 3D labels | Phase 7 |
 
 ### Phase 0: Input Staging
 
@@ -1131,13 +1132,61 @@ interactive/3d_segmentation/
     experiment.json
 ```
 
-Step 1 lists every saved result under `OMeGa Optimized Mesh -> SAI3D Results`.
-Each run has an independent checkbox and point-cloud cache, labeled by its 2D
-evidence source and manual-anchor weight. Multiple results can be shown together
-for comparison, and changing Step 6 settings does not change which saved run a
-Step 1 row references. These viewer layers do not mutate the editor's baseline
-samples, optimized mesh vertices, or persistent regions. Step 6 is responsible
-only for choosing and running experiments.
+Step 1 gives `SAI3D Segmentation` its own result card beside the geometric
+point-cloud sources. Each run has an independent checkbox and point-cloud
+cache, labeled by its 2D evidence source and manual-anchor weight. Multiple
+results can be shown together for comparison, and changing Step 6 settings does
+not change which saved run a Step 1 row references. These viewer layers do not
+mutate the editor's baseline samples, optimized mesh vertices, or persistent
+regions. Step 6 is responsible only for choosing and running experiments.
+
+Split&Splat registrations additionally expose full Gaussian artifacts in a
+separate Step 1 `Split&Splat` card. The shared global RGB reconstruction appears
+once. Each experiment then presents its input proposals, final Split masks,
+Split-labeled global 3DGS, categorical composed geometry, an RGB object selector
+derived from the shared reconstruction, and a composed-geometry object
+selector. This distinction is intentional: the released per-object
+Split&Splat initializer is geometry-only, while the shared global model carries
+the valid radiometric appearance. The official and SAM2 Video experiments
+remain visually separate without expanding hundreds of objects into hundreds
+of controls.
+
+The corresponding per-view results also appear as read-only Step 3 layers under
+`Frame Proposals` and `Split-Refined Masks`; 2D and 3D use the same run-local IDs
+and deterministic colors. Checking a Gaussian artifact renders it directly in
+the main camera-synchronized viewport and hides the software point layers.
+Selecting any point-cloud source switches back. This camera-synchronized
+viewport is the only Gaussian viewer path in the editor, avoiding duplicate
+model loads and divergent display settings.
+The embedded renderer uses no display tone mapping and a high-precision
+floating-point accumulation target so low-opacity, high-dynamic-range Gaussian
+colors follow the Split&Splat training renderer as closely as the browser
+allows.
+
+The parallel **Anchored 3D Split** experiment addresses a specific failure of
+the released Split stage on user-authored architectural regions. Released Split
+rediscovers run-local identities and uses SAM2 to recover masks; this can change
+correct manual boundaries or remove intended regions. The anchored path instead:
+
+1. replaces propagated maps with exact persistent-region maps on completed
+   manual frames;
+2. z-buffers the shared global 3DGS against itself and accumulates region votes
+   on its Gaussian means, with completed frames weighted more strongly;
+3. keeps persistent IDs rather than clustering or renumbering them;
+4. assigns every directly observed Gaussian and completes the small unobserved
+   remainder by confidence-weighted local 3D consensus;
+5. projects the complete ownership field into each view and relabels a whole
+   connected source-mask component when the 3D majority is clear;
+6. preserves every foreground pixel and passes manual masks through exactly;
+7. partitions every global Gaussian into a persistent-region initializer.
+
+This is intentionally closer to SAI3D-style 3D association than to SAM2 mask
+refinement. It uses geometry to correct identity, not to invent a cleaner 2D
+boundary. Confidence and provenance describe ownership reliability but do not
+delete uncertain geometry. The editor exposes the dense anchored masks,
+complete projected 3D ownership, and labeled global 3DGS as separate
+diagnostics. Per-Gaussian confidence/provenance and per-frame manual weights
+are saved for the later reconstruction stage.
 
 The optimized mesh exposes two user-facing point representations.
 `Mesh Vertices` preserves every finite vertex and therefore reveals OMeGa's
@@ -1452,7 +1501,226 @@ split in a second pass into panels, ornaments, bricks, or trim. This keeps the
 main workflow focused while leaving a clean path to coarse-to-fine region
 definition.
 
-### Phase 7: Review Loop
+### Phase 7: Region-Aware Reconstruction
+
+The stable artifact boundaries, backend interface, baseline-isolation rules,
+and controlled experiment matrix are specified in
+[`SEGMENTATION_RECONSTRUCTION_ARCHITECTURE.md`](SEGMENTATION_RECONSTRUCTION_ARCHITECTURE.md).
+
+Step 5 is a reasonable replacement for raw automatic SAM2 masks wherever a
+method exposes per-view masks as supervision. The precise claim is:
+
+```text
+User-conditioned Step 5 candidates provide more intent-aligned mask evidence
+than independent SAM2 Automatic proposals, while complete keyframes remain hard
+annotations and unsupported propagated pixels remain soft or unknown.
+```
+
+This is an interface-level substitution, not a claim that every propagated mask
+is final ground truth or that an entire prior pipeline can be skipped.
+Compatibility depends on what the downstream method expects:
+
+- **SAI3D:** direct fit. The current Step 6 adapter already replaces automatic
+  proposal evidence with stable persistent IDs and gives manual anchors higher
+  weight.
+- **Split&Splat:** direct at the per-view-mask boundary. Experiment B replaces
+  its SAM2 Automatic initialization while retaining released Split. Experiment
+  C additionally replaces released Split mask recovery with anchored 3D
+  identity association so user-authored shapes and IDs survive. Instance
+  reconstruction and composition remain useful downstream.
+- **Gaussian Grouping:** compatible through an adapter that renders stable
+  region IDs and confidence-weighted identity targets. Step 5 replaces the
+  SAM/DEVA pseudo-label source, not the Gaussian identity optimization.
+- **Per-object 3DGS, 2DGS, and OMeGa:** direct once hard, soft, negative, and
+  unknown pixels are kept distinct and Step 6 points are exported by region.
+- **SAGA:** not a literal drop-in. Its scale-gated affinity field is trained from
+  overlapping multi-scale SAM proposals, while our persistent regions are
+  exclusive task labels.
+- **SAM2Object:** Step 5 largely replaces its propagation role. Feeding the
+  result back into another long SAM2 propagation is not automatically useful.
+
+#### Relevant Reconstruction Methods
+
+| Method | Main inputs | Reconstruction organization | Main outputs | Lesson for Step 7 |
+| --- | --- | --- | --- | --- |
+| [Split&Splat](https://arxiv.org/html/2602.03809v1) | Posed RGB, SfM/depth, SAM2-derived view-consistent instance masks, labeled point subsets | Trains one 3DGS per instance, refines masks from rendered geometry, merges colliding Gaussian sets, then jointly refines the composition | Separate instance Gaussian sets plus one composed scene with instance descriptors | Closest executable baseline for independent warm-up followed by scene-wise composition |
+| [ObjectSDF++](https://qianyiwu.github.io/objectsdf%2B%2B) | Posed RGB and instance masks | Jointly renders multiple object SDFs with occlusion-aware object opacity and an object-distinction regularizer | Whole-scene and separate object meshes | Separate object ownership still needs joint visibility and collision reasoning |
+| [RICO](https://arxiv.org/abs/2303.08605) | Posed RGB, semantic masks, monocular depth, and normals | Joint compositional SDF with object-background depth constraints and smoothness in unobserved space | Per-object and combined meshes | Depth/normal priors can regularize architectural regions, but indoor-background assumptions should not be copied blindly |
+| [Gaussian Object Carver](https://arxiv.org/html/2412.02075) | RGB, instance labels, monocular depth, and normals | One shared 3DGS with per-Gaussian semantics, followed by segmented point extraction and optional object completion | Shared scene, object point sets, and optional watertight object meshes | A shared scene can preserve context while still exporting object geometry; the announced code is not currently public |
+| [Gaussian Grouping](https://arxiv.org/abs/2312.00732) | RGB and SAM/DEVA identity supervision | One 3DGS with a differentiably rendered identity feature and local 3D consistency | One editable, grouped Gaussian scene | Strong shared-scene baseline; region identity need not require separate training |
+| [vMAP](https://arxiv.org/abs/2302.01838) | RGB-D video, poses, and object masks | One compact implicit model per object, optimized in a vectorized map | Separate watertight object fields | Supports modular object models, although its online RGB-D setting differs from our posed-image dataset |
+| [Direct Object-Level Reconstruction via Probabilistic Gaussian Splatting](https://arxiv.org/abs/2603.14316) | Posed images and continuous foreground probabilities | Filters the SfM initializer and trains a compact single-object 2DGS with per-Gaussian foreground probability | One compact object-level 2DGS and probability masks | Closest mathematical reference for using Step 5 confidence as soft supervision rather than thresholding every candidate |
+
+The local Split&Splat source confirms the important implementation sequence:
+
+1. create one image/mask/camera folder per instance;
+2. initialize each instance from its labeled point subset;
+3. train each Gaussian model independently with RGB and rendered-opacity mask
+   losses;
+4. refine masks by prompting SAM2 from projected instance Gaussians and checking
+   agreement with rendered geometry;
+5. progressively merge spatially colliding Gaussian sets;
+6. reset opacity, stop densification during composition, and jointly refine with
+   progressively stronger mask consistency.
+
+This means Step 5 can improve Split&Splat's supervision, but the composition
+stage is still needed to repair independent-model overlap, missing context, and
+boundary disagreement. Keep Split&Splat as an external baseline behind a data
+adapter; its repository combines code under different license terms, so its
+implementation should not be copied into the Apache-licensed OMeGa fork without
+an explicit license review.
+
+The current anchored reconstruction consumes `training_view_weights.json`,
+weights the rendered-opacity mask loss on completed manual frames, and starts
+from each region's exact full-attribute Gaussian subset. Its warm-up disables
+densify-and-prune so no initializer Gaussian is discarded. Released SAM2 mask
+refinement remains an optional isolated ablation rather than part of the
+default anchored result.
+
+#### Region Identity Versus Reconstruction Ownership
+
+A persistent `region_id` records designer intent. A `component_id` records which
+parameters and geometry are optimized together. They should not be forced to be
+identical.
+
+Examples:
+
+- a detached door or railing can map one region to one component;
+- facade plane, attached trim, and an arch seam can retain separate region IDs
+  but share one component so they do not reconstruct as overlapping shells;
+- a hierarchical door may have child region IDs for panels and ornaments while
+  one component owns their common geometry;
+- context or ignore regions supervise visibility but do not need a standalone
+  model.
+
+This separation lets the UI preserve semantic/task labels while the
+reconstruction chooses a stable ownership partition.
+
+#### Step 7 Input Contract
+
+```text
+interactive/reconstruction/input/
+  supervision_manifest.json
+  components.json
+  regions.json
+  frames.jsonl
+  hard_region_maps/             # complete user-edited keyframes
+  candidate_layers/<method>/    # Step 5 label/confidence/unknown maps
+  segmented_points/<method>/    # Step 6 points with stable region IDs
+  view_evidence/                # optional depth and StableNormal
+```
+
+`supervision_manifest.json` freezes the exact Step 5 backend, run fingerprint,
+anchor set, and Step 6 source. `components.json` maps persistent regions to
+trainable components and stores per-component settings such as primitive
+budget, planar regularization, normal/depth weights, subdivision, remeshing, and
+training iterations.
+
+For frame `i`, region `r`, and pixel `p`, construct a target `M_ir(p)` and weight
+`W_ir(p)`:
+
+```text
+W_ir(p) = 1                         for a complete manual anchor
+        = lambda_soft * c_ir(p)     for a propagated candidate
+        = 0                         for unknown or conflicting evidence
+```
+
+where `0 < lambda_soft < 1` and `c_ir` is a confidence only when the backend
+provides a meaningful one. A completed keyframe can provide trusted negatives
+for its absent visible regions. An incomplete or unsupported frame must not be
+silently interpreted as background.
+
+All components are rendered together to obtain scene color `C_i`, depth, and
+per-region/component opacity `A_ir`. A minimal joint objective is:
+
+```text
+L = L_scene_rgb
+  + lambda_mask * sum_irp W_ir(p) BCE(A_ir(p), M_ir(p))
+  + sum_k L_geometry(k)
+  + lambda_separate * L_component_overlap
+  + lambda_boundary * L_shared_boundary
+```
+
+`L_geometry(k)` is backend-specific. For OMeGa it can include its photometric,
+normal, mesh, and splat regularizers with region-specific weights. For 2DGS or
+3DGS it includes the original rendering and geometry regularization. Independent
+warm-up should compute RGB loss only on trusted foreground support and use
+opacity loss on trusted positives/negatives; multiplying the RGB image by an
+incomplete mask and treating every black pixel as background would bake Step 5
+errors into the model.
+
+#### Reconstruction Modes
+
+Implement three comparable modes behind one adapter contract:
+
+1. **Shared scene baseline:** one 3DGS/2DGS/OMeGa scene with a rendered region-ID
+   or probability head, following Gaussian Grouping-style identity supervision.
+2. **Independent component baseline:** initialize and optimize one model per
+   component, then concatenate or compose them. This is the closest
+   Split&Splat baseline and exposes leakage caused by independent training.
+3. **Compositional reconstruction:** independently warm-start components, then
+   render all components together with common cameras and jointly refine
+   visibility, boundaries, and overlap. This is the preferred direction.
+
+For OMeGa, each component should own a mesh, its face-bound splats, optimizer
+state, and remeshing policy. The renderer depth-sorts splats from every component
+in one scene. Remeshing must not cross persistent-region boundaries unless those
+regions deliberately share a component; shared component boundaries need
+coincidence/stitching constraints rather than two independently drifting edges.
+
+Step 6 is an initializer, not immutable truth. Region-labeled points seed the
+appropriate component, high-confidence unlabeled geometry can remain shared
+context, and unsupported regions can fall back to the global initializer rather
+than disappearing.
+
+#### Step 7 Outputs
+
+```text
+interactive/reconstruction/runs/<backend>/<run_id>/
+  config.json
+  supervision_manifest.json
+  components/<component_id>/
+    model/
+    mesh/
+    splats/
+    region_ids.json
+  composed/
+    model/
+    mesh/
+  renders/
+    rgb/
+    region_id/
+    opacity/
+    depth/
+    normal/
+  metrics.json
+```
+
+All components remain in the original COLMAP/OMeGa world coordinate system, so
+separate exports can be edited independently and loaded together without a
+second alignment.
+
+#### First Step 7 Experiment
+
+Do not patch OMeGa's training loop first. Freeze one supervision packet and test
+three representative components: a large facade plane, a detailed door/arch,
+and a thin railing.
+
+Compare:
+
+1. one full-scene 2DGS/3DGS baseline;
+2. independently masked component models;
+3. independent warm-up followed by joint compositional refinement.
+
+Use the same RGB frames, cameras, hard anchors, one selected Step 5 candidate
+layer, and one Step 6 segmented initializer. Measure held-out RGB quality,
+region silhouette IoU and boundary F-score, cross-region leakage, component
+coverage, overlap/cracks at shared boundaries, geometry error where a reference
+exists, and primitive count. This experiment determines whether region-wise
+ownership helps before introducing the additional mesh/splat coupling and
+remeshing complexity of OMeGa.
+
+### Cross-Phase Review Loop
 
 The system should guide the user to the next useful edit.
 
@@ -1478,7 +1746,7 @@ edit keyframe
 This is a strong research direction because it directly measures reduction in
 manual work.
 
-### Phase 8: Future Dense-Mask Export
+### Phase 8: Post-Reconstruction Dense-Mask Export
 
 Export:
 
@@ -1511,9 +1779,10 @@ Downstream reconstruction can use:
 
 ## 6. Current Implementation Snapshot
 
-The current editor implements six stages: preparation, local SAM2 proposals,
-unified pixel selection, persistent-region anchors, parallel candidate
-propagation, and SAI3D experiments. It exports region-colored COLMAP points from
+The current editor implements the six operational stages from preparation
+through 3D segmentation. Phase 7 now has a frozen reconstruction contract, but
+no region-aware training backend is implemented yet. It exports region-colored
+COLMAP points from
 exact track consensus, region-colored feed-forward initializer points, and
 region-colored samples from the final strongest OMeGa mesh. The projected
 clouds use calibrated z-buffer visibility and anchor voting. All three sparse
@@ -1545,8 +1814,8 @@ Prompts` then reuse the same stage-two decoders as the initializer experiment.
 
 Current grove-entrance result with eight complete anchors and 26 persistent
 regions: the strongest mesh contributed 1,768,807 finite vertices, of which
-1,613,227 received an unambiguous persistent ID. Sparse projected coverage is
-70.4% on average across 214 views, compared with 31.8% for OMeGa Initializer Points and
+1,613,227 received an unambiguous persistent ID. Sparse projected coverage is 70.4% on average across 214 views, compared with
+31.8% for OMeGa Initializer Points and
 3.7% for COLMAP Tracks. `Final Superpixels` raises mean coverage to 97.4%;
 `Final 2D/3D CRF` reaches 96.4% and abstains slightly more. These are coverage
 statistics, not accuracy claims: the saved side-by-side layers must still be
@@ -2283,22 +2552,25 @@ The system recommends where the user should edit next and reduces total manual
 work compared with uniform frame sampling.
 ```
 
-### Milestone 6: Reconstruction Export And Downstream Test
+### Milestone 6: Region-Aware Reconstruction And Downstream Test
 
-Package the current evidence tiers for reconstruction first; dense masks can be
-added later for consumers that require them.
+Freeze the current evidence tiers, then compare shared-scene, independent-
+component, and jointly composed reconstruction without requiring dense masks in
+every frame.
 
 Needed:
 
 - supervision manifest with hard/soft/sparse provenance;
-- region metadata;
-- available confidence/uncertainty maps;
-- training split scripts or examples for object-wise/layer-wise 3DGS/OMeGa.
+- stable region-to-component ownership and per-component settings;
+- confidence, uncertainty, and explicit unknown handling;
+- shared-scene, independent-component, and compositional 3DGS/2DGS adapters;
+- an OMeGa adapter only after the simpler reconstruction comparison is
+  understood.
 
 Success criterion:
 
 ```text
-The exported package can directly supervise a downstream reconstruction run
+The same supervision packet can train and compare all reconstruction modes
 without treating propagated or unsupported pixels as ground truth.
 ```
 

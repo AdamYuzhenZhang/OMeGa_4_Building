@@ -19,6 +19,7 @@ from .colmap_track_propagation import ColmapTrackConfig
 from .dinov3_evidence import DinoV3EvidenceConfig, DinoV3EvidenceManager
 from .feedforward_point_field import FeedForwardPointFieldConfig
 from .feedforward_point_propagation import FeedForwardPointConfig
+from .gaussian_viewer import viewer_settings, viewer_status
 from .memory_vos_propagation import MemoryVOSConfig
 from .multifield_crf_recovery import MultiFieldCrfConfig
 from .omega_mesh_point_cloud import OmegaMeshHybridPointCloudConfig
@@ -343,11 +344,22 @@ def create_app(
     app = FastAPI(title="OMeGa Interactive Segmentation Editor")
     app.state.editor_state = state
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    supersplat_public = THIRD_PARTY_ROOT / "supersplat-viewer" / "public"
+    if (supersplat_public / "index.html").is_file():
+        app.mount(
+            "/vendor/supersplat",
+            StaticFiles(directory=supersplat_public),
+            name="supersplat",
+        )
 
     @app.middleware("http")
     async def no_cache_editor_assets(request, call_next):
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/static/"):
+        if (
+            request.url.path == "/"
+            or request.url.path.startswith("/static/")
+            or request.url.path.startswith("/api/3d-segmentation/viewer/")
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -433,6 +445,48 @@ def create_app(
     def segmentation3d_result_points(run_id: str) -> Response:
         try:
             return _json_response(state.segmentation3d_result_points(run_id))
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/3d-segmentation/viewer/status")
+    def segmentation3d_viewer_status() -> Response:
+        return _json_response(viewer_status(supersplat_public))
+
+    @app.get("/api/3d-segmentation/viewer/settings.json")
+    def segmentation3d_viewer_settings() -> Response:
+        return _json_response(viewer_settings())
+
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/gaussians/{variant_id}.ply"
+    )
+    def segmentation3d_gaussian_artifact(
+        run_id: str,
+        variant_id: str,
+    ) -> FileResponse:
+        try:
+            path = state.segmentation3d.gaussian_artifact(run_id, variant_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=f"{run_id}_{variant_id}.ply",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+            },
+        )
+
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/gaussian-scenes/{variant_id}.json"
+    )
+    def segmentation3d_gaussian_scene(
+        run_id: str,
+        variant_id: str,
+    ) -> Response:
+        try:
+            return _json_response(
+                state.segmentation3d.gaussian_scene(run_id, variant_id)
+            )
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

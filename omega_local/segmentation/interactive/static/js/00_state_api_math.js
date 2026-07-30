@@ -1,6 +1,7 @@
 // Shared DOM handles, editor state, API helpers, and vector math.
 const canvas = document.getElementById("viewer");
-const ctx = canvas.getContext("2d", { alpha: false });
+const ctx = canvas.getContext("2d", { alpha: true });
+const gaussianViewportFrame = document.getElementById("gaussianViewport");
 const statusEl = document.getElementById("projectStatus");
 const hud = document.getElementById("viewerHud");
 const filmstrip = document.getElementById("filmstrip");
@@ -78,6 +79,10 @@ const testRegionPairButton = document.getElementById("testRegionPair");
 const segmentation3dStatusEl = document.getElementById("segmentation3dStatus");
 const segmentation3dResultsEl = document.getElementById("segmentation3dResults");
 const segmentation3dResultSummaryEl = document.getElementById("segmentation3dResultSummary");
+const splitSplatResultsEl = document.getElementById("splitSplatResults");
+const splitSplatResultSummaryEl = document.getElementById("splitSplatResultSummary");
+const mapAnything3dgsResultsEl = document.getElementById("mapAnything3dgsResults");
+const mapAnything3dgsResultSummaryEl = document.getElementById("mapAnything3dgsResultSummary");
 const segmentation3dMethodInput = document.getElementById("segmentation3dMethod");
 const segmentation3dInput = document.getElementById("segmentation3dInput");
 const segmentation3dSourceField = document.getElementById("segmentation3dSourceField");
@@ -111,6 +116,7 @@ const showPromptDotsInput = document.getElementById("showPromptDots");
 const lockRegionSelectionInput = document.getElementById("lockRegionSelection");
 const clearSelectionButton = document.getElementById("clearSelection");
 const selectionStatusEl = document.getElementById("selectionStatus");
+const idPanel = document.getElementById("idPanel");
 const regionList = document.getElementById("regionList");
 const idList = document.getElementById("idList");
 const pointCloudStatusEl = document.getElementById("pointCloudStatus");
@@ -241,6 +247,19 @@ const state = {
   segmentation3dJobId: "",
   segmentation3dRunId: "",
   segmentation3dPollTimer: null,
+  gaussianViewportRunId: "",
+  gaussianViewportVariantId: "",
+  gaussianViewportLoadedKey: "",
+  gaussianViewportVisible: false,
+  gaussianViewportReady: false,
+  gaussianViewportProgress: 0,
+  gaussianViewportError: "",
+  gaussianViewportScene: null,
+  gaussianViewportColorMode: "",
+  gaussianViewportColorSwitching: false,
+  gaussianViewportColorProgress: 100,
+  gaussianViewportPartVisibility: {},
+  gaussianViewportPartProgress: {},
   propagationMethodId: "",
   sourceRefinementMethodId: "",
   regionPairMethodId: "vggts_pair",

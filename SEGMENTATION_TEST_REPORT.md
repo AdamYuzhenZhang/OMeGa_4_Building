@@ -325,20 +325,12 @@ SAI3D is the current best automatic endpoint. We should treat its 3D labels as
 the canonical state, then improve masks by projection, local boundary cleanup,
 and interactive edits.
 
-### Split&Splat-Style Tests
-
-Implementations:
-
-```text
-omega_local/segmentation/sai3d_baseline.py
-omega_local/segmentation/split_splat_baseline.py
-scan_processing/VisSegOmega10_visualize_split_splat_baseline.py
-```
+### Historical Split-Style Tests
 
 We tested two related ideas:
 
 - a SAI3D finalizer inspired by Split&Splat;
-- an official-like Split&Splat split-stage port that does not use SAI3D labels.
+- a retired Split-stage approximation that did not use SAI3D labels.
 
 Key idea:
 
@@ -357,7 +349,7 @@ How we tried it:
 
 What we found:
 
-- It is a useful faithful baseline for mask-to-3D propagation.
+- It was a useful early diagnostic for mask-to-3D propagation.
 - It still inherits initial SAM2 proposal errors.
 - Some views have final masks that miss elements; other views let large masks
   replace smaller intended segments.
@@ -368,7 +360,9 @@ What we found:
 Conclusion:
 
 Split&Splat logic is useful for reasoning about projection and geometric IoU,
-but it does not solve our main segmentation challenge automatically.
+but it does not solve our main segmentation challenge automatically. The
+partial port used for this early test has been superseded by the complete staged
+paper adapter in `omega_local/segmentation/split_splat/`.
 
 ### Gaussian Grouping
 

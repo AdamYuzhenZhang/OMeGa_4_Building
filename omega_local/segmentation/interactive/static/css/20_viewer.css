@@ -1,4 +1,4 @@
-/* Main 3D canvas, HUD, cursor badge, and propagation modal. */
+/* Main 3D canvas, embedded splats, HUD, cursor badge, and comparison modal. */
 .viewer-shell {
   position: relative;
   min-width: 0;
@@ -7,10 +7,29 @@
   background: #070809;
 }
 
-#viewer {
+.gaussian-viewport {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
   display: block;
   width: 100%;
   height: 100%;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.gaussian-viewport[hidden] {
+  display: none;
+}
+
+#viewer {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: transparent;
   cursor: grab;
   touch-action: none;
 }
@@ -25,6 +44,7 @@
 
 .viewer-hud {
   position: absolute;
+  z-index: 2;
   left: 14px;
   bottom: 14px;
   max-width: min(260px, calc(100% - 28px));

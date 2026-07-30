@@ -20,8 +20,8 @@ common 2D proposal initializer
   -> SAM2Object tracking / graph-consistency baseline
   -> SAI3D multi-view superpoint graph baseline
   -> SAI3D-to-view proposal-gated finalizer inspired by Split&Splat
-  -> official-like Split&Splat propagation baseline
   -> SAI3D point-cloud evidence variants
+  -> staged released Split&Splat and anchored-mask experiments
 ```
 
 The initializer is the only place that stages DSLR frames from the capture
@@ -60,7 +60,6 @@ third_party/OMeGa_4_Building/
       view_proposals_baseline.py
       sam2object_baseline.py
       sai3d_baseline.py
-      split_splat_baseline.py
       gaussian_grouping_pipeline.py
 
 scan_processing/
@@ -69,7 +68,6 @@ scan_processing/
   VisSegOmega05_visualize_sai3d_observe.py
   VisSegOmega08_visualize_view_proposals.py
   VisSegOmega09_visualize_gaussian_grouping.py
-  VisSegOmega10_visualize_split_splat_baseline.py
 ```
 
 The active outputs live under:
@@ -79,7 +77,6 @@ The active outputs live under:
 <model_dir>/segmentation/baselines/sam2object/
 <model_dir>/segmentation/baselines/sai3d/
 <model_dir>/segmentation/baselines/sai3d_area_samples/
-<model_dir>/segmentation/baselines/split_splat/
 <model_dir>/segmentation/baselines/sai3d_mapanything_points_1024/
 <model_dir>/segmentation/baselines/sai3d_colmap_sparse_points_1024_sparse_graph/
 <model_dir>/segmentation/gaussian_grouping/deva_scale4/
@@ -435,66 +432,15 @@ forcing large object regions inside SAI3D. Merging should happen later using
 2D consistency, user grouping/splitting, StableNormal/depth agreement, and
 object-level training goals.
 
-## 4. Official-Like Split&Splat Propagation Baseline
+## 4. Staged Split&Splat Reconstruction Baseline
 
-Existing method:
-
-- Split&Splat: https://github.com/LTTM/Split_and_Splat
-- Paper: https://arxiv.org/abs/2602.03809
-
-Implementation:
-
-```text
-omega_local/segmentation/split_splat_baseline.py
-scan_processing/VisSegOmega10_visualize_split_splat_baseline.py
-```
-
-Role:
-
-This is the faithful test of Split&Splat's split-stage logic in our OMeGa
-conventions. It does not consume SAI3D labels. It consumes the same common SAM2
-automatic proposal source and a chosen 3D point set.
-
-Math / logic:
-
-- Project the 3D point set into each view using rendered depth visibility.
-- Initialize global 3D labels from the first processed view's eroded SAM2
-  proposals.
-- For each later view, project current global point labels into a sparse
-  "virtual mask".
-- Assign each local SAM2 proposal by eroded overlap with that virtual mask.
-- If a proposal has no overlap, create a new global label and vote its visible
-  points into that label.
-- If a proposal overlaps one label, update that label with the proposal's
-  visible points.
-- If a proposal overlaps multiple labels, vote points into the majority label.
-- After all views, keep point labels whose majority vote probability is at least
-  `0.7`.
-- Cluster each 3D label with DBSCAN, keeping the largest cluster unless the label
-  has many clusters, matching the upstream Split&Splat heuristic.
-- Write per-view masks by matching final clustered 3D labels back to automatic
-  SAM2 proposals; run SAM2 coreset point prompting only for visible labels with
-  no matched proposal.
-
-What to inspect:
-
-- `point_labels/labeled_points.ply`: raw propagated point labels;
-- `point_labels/clustered_labeled_points.ply`: final clustered point labels;
-- `view_masks/projected_points/`: sparse virtual masks from final 3D labels;
-- `view_masks/proposal_assigned/`: local SAM2 proposals assigned to global IDs;
-- `view_masks/sam2_fallback/`: masks generated only for visible labels missed by
-  proposal assignment;
-- `view_masks/masks/`: final exclusive label maps for our tooling;
-- `view_masks/by_instance/`: per-instance binary masks closer to the upstream
-  Split&Splat output format.
-
-Why this matters:
-
-- It tests the actual Split&Splat split idea separately from SAI3D.
-- It tells us whether their proposal-to-3D voting logic is enough for our
-  architectural scene before we add our own user edits or StableNormal cues.
-- If it fails, we can say the failure belongs to the baseline assumptions rather
-  than our SAI3D extension.
+The active Split&Splat integration is documented in
+`SPLIT_SPLAT_INTEGRATION_PLAN.md` and run through
+`scripts/run_omega_split_splat.py`. It invokes the released implementation
+through a narrow staged adapter, including the global 3DGS, Split, per-instance
+Splat, mask refinement, and progressive composition stages. A controlled
+proposal-source experiment replaces only the initial SAM2 masks, while the
+anchored adaptation has its own explicit run and reconstruction contracts.
 
 ## 5. Current Baseline Takeaways
 
@@ -502,8 +448,8 @@ Why this matters:
   architectural pieces too broadly.
 - SAI3D on OMeGa mesh or area samples gives better surface continuity, but is
   limited by the quality and completeness of the current OMeGa mesh.
-- The official-like Split&Splat baseline directly tests automatic SAM2 proposal
-  propagation through 3D point labels, without SAI3D.
+- The released Split&Splat run tests the complete paper pipeline, while the
+  proposal-source and anchored variants isolate our changes.
 - SAI3D on MapAnything gives broad coverage and good semantic support, but the
   raw point cloud is noisy.
 - SAI3D on COLMAP sparse points gives strong detail/local structure support, but

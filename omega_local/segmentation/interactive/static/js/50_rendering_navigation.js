@@ -11,7 +11,7 @@ function drawSourceImage(image, camera) {
   }
 }
 
-function drawFrameLayers(camera, layout, view) {
+function drawFrameLayers(camera, layout, view, drawBackground = true) {
   if (!state.exactFrameView) return;
   const frameView = view || defaultFrameView(camera, state.selectedFrame ? state.selectedFrame.id : -1);
   const scale = layout.scale * frameView.zoom;
@@ -21,7 +21,7 @@ function drawFrameLayers(camera, layout, view) {
     layout.y0 + layout.height * 0.5 - frameView.centerV * scale,
   );
   ctx.scale(scale, scale);
-  if (state.showFrameImage && state.selectedImage && state.selectedImage.complete) {
+  if (drawBackground && state.showFrameImage && state.selectedImage && state.selectedImage.complete) {
     drawSourceImage(state.selectedImage, camera);
     ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
     ctx.fillRect(0, 0, camera.width, camera.height);
@@ -184,8 +184,12 @@ function drawPromptDots(prompts, camera, layout, frameView, radius, kind) {
 
 function render() {
   syncCanvasSize();
-  ctx.fillStyle = "#070809";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const gaussianVisible = gaussianViewportVisible();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!gaussianVisible) {
+    ctx.fillStyle = "#070809";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
   if (!state.camera || !state.positions.length) {
     hud.textContent = "Loading";
@@ -197,7 +201,7 @@ function render() {
   const frameView = state.exactFrameView && state.selectedFrame
     ? ensureFrameView(state.camera, state.selectedFrame.id)
     : null;
-  drawFrameLayers(state.camera, layout, frameView);
+  drawFrameLayers(state.camera, layout, frameView, !gaussianVisible);
   for (const layer of Object.values(state.evidencePointClouds)) {
     if (layer.visible) drawEvidencePoints(layer, camera, layout);
   }
@@ -208,6 +212,7 @@ function render() {
   drawSamPrompts(state.camera, layout, frameView);
   drawRgbdCuePrompts(state.camera, layout, frameView);
   drawLassoOverlay();
+  if (gaussianVisible) syncGaussianViewportCamera(camera, layout);
 
   const activeSamPromptCount = state.selectedFrame
     ? state.samPrompts.filter((prompt) => Number(prompt.frameId) === Number(state.selectedFrame.id)).length
@@ -228,6 +233,13 @@ function render() {
   if (activeRgbdClickCount) items.push(`RGB-D ${activeRgbdClickCount}`);
   if (state.selectionOps.length) items.push(`${state.selectionOps.length} sel op${state.selectionOps.length === 1 ? "" : "s"}`);
   if (!state.showPointCloud) items.push("points off");
+  if (gaussianVisible) {
+    const run = savedSegmentation3dRun(state.gaussianViewportRunId);
+    const variant = segmentation3dGaussianArtifacts(run).find(
+      (row) => String(row.variantId) === String(state.gaussianViewportVariantId)
+    );
+    items.push(`3DGS ${variant ? (variant.displayName || variant.variantId) : state.gaussianViewportVariantId}`);
+  }
   for (const [sourceId, layer] of Object.entries(state.evidencePointClouds)) {
     if (!layer.visible) continue;
     const sourceName = layer.displayName || (sourceId === "colmap"

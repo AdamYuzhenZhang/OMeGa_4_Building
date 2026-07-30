@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Segmentation Editor</title>
     <link rel="stylesheet" href="/static/css/00_base_toolbar.css?v=20260708-propagation-counts" />
-    <link rel="stylesheet" href="/static/css/20_viewer_modal.css?v=20260708-propagation-counts" />
-    <link rel="stylesheet" href="/static/css/30_id_panel.css?v=20260708-propagation-counts" />
-    <link rel="stylesheet" href="/static/css/40_edit_panel.css?v=20260721-colmap-dense-stage-2" />
+    <link rel="stylesheet" href="/static/css/20_viewer.css?v=20260727-inplace-splats" />
+    <link rel="stylesheet" href="/static/css/30_id_panel.css?v=20260730-gaussian-color-switch-1" />
+    <link rel="stylesheet" href="/static/css/40_edit_panel.css?v=20260729-mapanything-live" />
     <link rel="stylesheet" href="/static/css/50_filmstrip.css?v=20260708-propagation-counts" />
     <link rel="stylesheet" href="/static/css/90_responsive.css?v=20260708-propagation-counts" />
   </head>
@@ -59,6 +59,14 @@
       </header>
 
       <main class="viewer-shell">
+        <iframe
+          id="gaussianViewport"
+          class="gaussian-viewport"
+          title="Camera-aligned Gaussian splat"
+          aria-hidden="true"
+          tabindex="-1"
+          hidden
+        ></iframe>
         <canvas id="viewer"></canvas>
         <aside id="idPanel" class="id-panel" aria-label="Proposal edits and segment IDs">
           <div id="regionList" class="region-list"></div>
@@ -140,15 +148,33 @@
                       <span class="point-source-name">Projected Regions</span>
                       <span id="segmentedOmegaFinalPointCloudStatus" class="step-status">Run Final Projection</span>
                     </label>
-                    <div class="point-result-group point-source-derived">
-                      <div class="point-result-head">
-                        <span>SAI3D Results</span>
-                        <span id="segmentation3dResultSummary" class="step-status">No saved runs</span>
-                      </div>
-                      <div id="segmentation3dResults" class="point-result-list">
-                        <span class="point-result-empty">Run SAI3D in Step 6</span>
-                      </div>
-                    </div>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>SAI3D Segmentation</span>
+                    <span id="segmentation3dResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="segmentation3dResults" class="point-result-list">
+                    <span class="point-result-empty">Run SAI3D in Step 6</span>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Split&amp;Splat</span>
+                    <span id="splitSplatResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="splitSplatResults" class="point-result-list">
+                    <span class="point-result-empty">Run the Split stage to generate Gaussians</span>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>MapAnything Region 3DGS</span>
+                    <span id="mapAnything3dgsResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="mapAnything3dgsResults" class="point-result-list">
+                    <span class="point-result-empty">Run MapAnything Split to generate region points</span>
                   </div>
                 </div>
                 <div class="prep-card">
@@ -481,11 +507,11 @@
         <div id="filmstrip" class="filmstrip"></div>
       </footer>
     </div>
-    <script src="/static/js/00_state_api_math.js?v=20260723-clean-hybrid"></script>
-    <script src="/static/js/10_labels_and_panels.js?v=20260720-propagation-registry"></script>
+    <script src="/static/js/00_state_api_math.js?v=20260730-gaussian-color-switch-1"></script>
+    <script src="/static/js/10_labels_and_panels.js?v=20260729-gaussian-parts"></script>
     <script src="/static/js/20_viewport_camera.js?v=20260716-memory-vos"></script>
-    <script src="/static/js/30_phase12_controls.js?v=20260721-dinov3-evidence"></script>
-    <script src="/static/js/32_point_cloud_sources.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/30_phase12_controls.js?v=20260728-split-splat-explorer"></script>
+    <script src="/static/js/32_point_cloud_sources.js?v=20260727-inplace-splats"></script>
     <script src="/static/js/35_phase12_services.js?v=20260720-propagation-registry"></script>
     <script src="/static/js/39_phase3_tool_controls.js?v=20260716-memory-vos"></script>
     <script src="/static/js/40_phase3_selection_preview.js?v=20260716-memory-vos"></script>
@@ -495,9 +521,13 @@
     <script src="/static/js/44_phase3_geometry_selection.js?v=20260716-memory-vos"></script>
     <script src="/static/js/46_propagation_preview.js?v=20260722-omega-final-points"></script>
     <script src="/static/js/47_persistent_regions.js?v=20260721-vggts-pair-test"></script>
-    <script src="/static/js/50_rendering_navigation.js?v=20260722-sai3d-result-list"></script>
-    <script src="/static/js/54_segmentation3d.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/50_rendering_navigation.js?v=20260727-inplace-splats"></script>
+    <script src="/static/js/54_segmentation3d.js?v=20260730-split-splat-cleanup-1"></script>
+    <script src="/static/js/59_split_splat_results.js?v=20260730-split-splat-cleanup-1"></script>
+    <script src="/static/js/60_mapanything_results.js?v=20260730-split-splat-cleanup-1"></script>
+    <script src="/static/js/56_gaussian_viewer.js?v=20260730-gaussian-color-switch-1"></script>
+    <script src="/static/js/58_gaussian_parts_panel.js?v=20260730-gaussian-color-switch-1"></script>
     <script src="/static/js/55_export_preview.js?v=20260716-memory-vos"></script>
-    <script src="/static/js/90_events_bootstrap.js?v=20260723-clean-hybrid"></script>
+    <script src="/static/js/90_events_bootstrap.js?v=20260727-inplace-splats"></script>
   </body>
 </html>

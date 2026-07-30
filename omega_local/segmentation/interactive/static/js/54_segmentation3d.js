@@ -34,17 +34,13 @@ function segmentation3dRunId() {
   const methodId = selectedSegmentation3dMethodId();
   const inputId = selectedSegmentation3dInputId();
   if (!methodId || !inputId) return "";
-  const method = segmentation3dMethods().find((row) => row.methodId === methodId);
-  const geometrySuffix = method && method.geometrySourceId
-    ? `_${String(method.geometrySourceId)}`
-    : "";
   const input = selectedSegmentation3dInput();
   if (!input || !Array.isArray(input.sourceOptions) || input.sourceOptions.length === 0) {
-    return `${methodId}_${inputId}${geometrySuffix}`;
+    return `${methodId}_${inputId}`;
   }
   const sourceId = selectedSegmentation3dSourceId();
   return sourceId
-    ? `${methodId}_${inputId}_${sourceId}_w${selectedSegmentation3dManualWeight()}${geometrySuffix}`
+    ? `${methodId}_${inputId}_${sourceId}_w${selectedSegmentation3dManualWeight()}`
     : "";
 }
 
@@ -56,6 +52,28 @@ function savedSegmentation3dRuns() {
   return state.segmentation3dStatus && Array.isArray(state.segmentation3dStatus.runs)
     ? state.segmentation3dStatus.runs
     : [];
+}
+
+function sai3dSegmentationRuns() {
+  return savedSegmentation3dRuns().filter((run) => String(run.methodId) === "sai3d");
+}
+
+function splitSplatSegmentationRuns() {
+  return savedSegmentation3dRuns().filter(
+    (run) => String(run.experimentFamily) === "split_splat",
+  );
+}
+
+function mapAnything3dgsRuns() {
+  return savedSegmentation3dRuns().filter(
+    (run) => String(run.experimentFamily) === "mapanything_region_3dgs",
+  );
+}
+
+function mapAnythingPipelineRuns() {
+  const rows = state.segmentation3dStatus &&
+    state.segmentation3dStatus.reconstructionPipelines;
+  return Array.isArray(rows) ? rows : [];
 }
 
 function segmentation3dResultLayerKey(runId) {
@@ -94,6 +112,7 @@ function segmentation3dSourceDisplayName(sourceId) {
 }
 
 function segmentation3dRunDisplayName(run) {
+  if (run.displayName) return String(run.displayName);
   const geometryName = String(run.geometrySource) === "omega_final_clean_hybrid"
     ? "Hybrid"
     : "Vertices";
@@ -112,14 +131,45 @@ function segmentation3dPointBudgetLabel(value) {
   return budget > 0 ? formatCount(budget) : "All";
 }
 
+function segmentation3dGaussianArtifacts(run) {
+  const artifacts = run && Array.isArray(run.gaussianArtifacts)
+    ? run.gaussianArtifacts
+    : [];
+  return artifacts
+    .map((artifact) => (
+      String(artifact.variantId) === "segments"
+        ? { ...artifact, displayName: "Instance ID Colors" }
+        : artifact
+    ));
+}
+
+function splitSplatArtifactStatus(artifact) {
+  const pointCount = Number(artifact.pointCount) || 0;
+  const labelCount = Number(artifact.labelCount) || 0;
+  const labeledPointCount = Number(artifact.labeledPointCount) || 0;
+  if (labelCount > 0) {
+    const coverage = pointCount > 0
+      ? Math.round(100 * labeledPointCount / pointCount)
+      : 0;
+    return `${formatCount(labelCount)} IDs · ${coverage}% labeled`;
+  }
+  return pointCount ? `${formatCount(pointCount)} splats` : "Ready";
+}
+
 function removeSegmentation3dResultLayer(runId) {
   delete state.evidencePointClouds[segmentation3dResultLayerKey(runId)];
 }
 
 function syncSegmentation3dResultList() {
   if (!segmentation3dResultsEl) return;
-  const runs = savedSegmentation3dRuns();
-  const validKeys = new Set(runs.map((run) => segmentation3dResultLayerKey(run.runId)));
+  const runs = sai3dSegmentationRuns();
+  const pointRuns = [
+    ...runs,
+    ...mapAnything3dgsRuns().filter(
+      (run) => String(run.artifactRole) === "split_labels",
+    ),
+  ];
+  const validKeys = new Set(pointRuns.map((run) => segmentation3dResultLayerKey(run.runId)));
   for (const key of Object.keys(state.evidencePointClouds)) {
     if (key.startsWith("segmentation3d:") && !validKeys.has(key)) delete state.evidencePointClouds[key];
   }
@@ -134,6 +184,8 @@ function syncSegmentation3dResultList() {
     empty.className = "point-result-empty";
     empty.textContent = state.segmentation3dBusy ? "SAI3D is running" : "Run SAI3D in Step 6";
     segmentation3dResultsEl.appendChild(empty);
+    syncReconstructionResultLists();
+    syncMapAnything3dgsResultList();
     return;
   }
 
@@ -174,6 +226,8 @@ function syncSegmentation3dResultList() {
     row.append(input, name, status);
     segmentation3dResultsEl.appendChild(row);
   }
+  syncReconstructionResultLists();
+  syncMapAnything3dgsResultList();
 }
 
 function fillSegmentation3dSelect(
@@ -233,6 +287,7 @@ function initializeSegmentation3dControls(status) {
   }
   syncSegmentation3dResultList();
   syncSegmentation3dControls();
+  scheduleMapAnythingPipelinePolling();
 }
 
 function refreshSegmentation3dInputOptions() {
@@ -397,6 +452,7 @@ async function setSegmentation3dResultVisible(runId, visible) {
     render();
     return;
   }
+  deactivateGaussianViewport({ redraw: false });
   layer.busy = true;
   syncSegmentation3dResultList();
   try {

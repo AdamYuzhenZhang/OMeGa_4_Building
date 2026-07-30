@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Embedded Gaussian Splat</title>
+    <link rel="stylesheet" href="/vendor/supersplat/index.css" />
+    <style>
+      html,
+      body,
+      #application-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      #ui {
+        display: none !important;
+      }
+
+      #application-canvas {
+        display: block;
+        opacity: 1 !important;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/static/js/57_splat_embed.js?v=20260730-gaussian-color-switch-1"></script>
+  </body>
+</html>

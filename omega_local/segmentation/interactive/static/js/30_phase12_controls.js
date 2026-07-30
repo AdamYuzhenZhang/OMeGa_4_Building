@@ -121,6 +121,8 @@ function initializeProposalLayerState() {
 
 const PROPOSAL_LAYER_GROUPS = [
   { key: "frame_proposals", label: "Frame Proposals" },
+  { key: "refined_masks", label: "Split-Refined Masks" },
+  { key: "geometry_support", label: "3D Evidence" },
   { key: "video_propagation", label: "Video Propagation" },
   { key: "sparse_3d_transfer", label: "Sparse 3D Transfer" },
   { key: "identity_refinement", label: "Identity Refinement" },
@@ -163,21 +165,26 @@ function proposalLayerControl(row) {
   text.textContent = String(row.label || layer);
   label.append(input, text);
   input.addEventListener("change", () => {
-    state.proposalLayers[layer] = input.checked;
-    state.proposalOverlayImages.clear();
-    state.proposalLayerOverlayImages.clear();
-    updateProposalThumbnails();
-    syncProposalControls();
-    if (state.selectedFrame) {
-      loadFrameProposalLayers(state.selectedFrame.id).catch((error) => {
-        console.error(error);
-        setSelectionStatus(error.message);
-      });
-    } else {
-      render();
-    }
+    setProposalLayerVisible(layer, input.checked).catch((error) => {
+      console.error(error);
+      setSelectionStatus(error.message);
+    });
   });
   return label;
+}
+
+async function setProposalLayerVisible(layer, visible) {
+  const key = normalizeProposalLayer(layer);
+  state.proposalLayers[key] = Boolean(visible);
+  state.proposalOverlayImages.clear();
+  state.proposalLayerOverlayImages.clear();
+  updateProposalThumbnails();
+  syncProposalControls();
+  if (state.selectedFrame) {
+    await loadFrameProposalLayers(state.selectedFrame.id);
+  } else {
+    render();
+  }
 }
 
 function renderProposalLayerControls() {

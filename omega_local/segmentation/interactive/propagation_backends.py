@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -102,6 +103,8 @@ class PropagationBackendInfo:
     stage: str = "anchor_to_mask"
     source_method_id: str = ""
     layer_group: str = "video_propagation"
+    label_space: str = "persistent_region"
+    read_only: bool = False
 
     @property
     def layer_key(self) -> str:
@@ -122,7 +125,8 @@ class PropagationBackend:
             "displayName": self.info.display_name,
             "engineName": self.info.engine_name,
             "description": self.info.description,
-            "labelSpace": "persistent_region",
+            "labelSpace": str(self.info.label_space),
+            "readOnly": bool(self.info.read_only),
             "supportsFullRun": bool(self.info.supports_full_run),
             "supportsRegionPair": bool(self.info.supports_region_pair),
             "pairOutputPolicy": str(self.info.pair_output_policy),
@@ -243,7 +247,10 @@ class PropagationBackendRegistry:
         return next(
             method_id
             for method_id in self._order
-            if self._backends[method_id].info.stage == "anchor_to_mask"
+            if (
+                self._backends[method_id].info.stage == "anchor_to_mask"
+                and self._backends[method_id].info.supports_full_run
+            )
         )
 
     @property
@@ -799,8 +806,11 @@ def build_default_propagation_registry(
         "sourceRunDirectory": str(omega_final_sam2_prompt_config.source_run_dir),
     }
 
+    split_splat_backends = _discover_split_splat_backends(work_root)
+
     return PropagationBackendRegistry(
         [
+            *split_splat_backends,
             PropagationBackend(
                 info=PropagationBackendInfo(
                     method_id="sam2_video",
@@ -1164,6 +1174,98 @@ def build_default_propagation_registry(
             ),
         ]
     )
+
+
+def _discover_split_splat_backends(work_root: Path) -> list[PropagationBackend]:
+    propagation_root = work_root.parent / "proposals" / "propagation"
+    backends: list[PropagationBackend] = []
+    for summary_path in sorted(propagation_root.glob("*/summary.json")):
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        label_space = str(payload.get("labelSpace") or "")
+        if label_space not in {
+            "split_splat_instance",
+            "frame_local_proposal",
+            "persistent_region",
+        }:
+            continue
+        # Ordinary editor propagation also uses persistent-region IDs. Only
+        # canonical staged Split experiments belong in this discovery path.
+        if label_space == "persistent_region" and not payload.get(
+            "canonicalRunDir"
+        ):
+            continue
+        is_proposal_preview = label_space == "frame_local_proposal"
+        method_id = normalize_method_id(
+            str(payload.get("methodId") or summary_path.parent.name)
+        )
+        canonical_dir = Path(str(payload.get("canonicalRunDir") or ""))
+        default_description = (
+            "Read-only frame-local proposals supplied to a staged Split&Splat run."
+            if is_proposal_preview
+            else (
+                "Read-only globally consistent masks produced by a staged "
+                "Split&Splat Split experiment."
+            )
+        )
+        backends.append(
+            PropagationBackend(
+                info=PropagationBackendInfo(
+                    method_id=method_id,
+                    display_name=str(
+                        payload.get("displayName")
+                        or f"Split&Splat {method_id}"
+                    ),
+                    engine_name=str(payload.get("engineName") or "Split&Splat"),
+                    description=str(
+                        payload.get("description") or default_description
+                    ),
+                    result_description=(
+                        "Split&Splat input proposal preview."
+                        if is_proposal_preview
+                        else (
+                            "Anchored persistent-region candidates."
+                            if label_space == "persistent_region"
+                            else "Split&Splat run-local instance candidates."
+                        )
+                    ),
+                    runtime_config={
+                        "canonicalRunDirectory": str(canonical_dir),
+                        "parameterSource": "staged_split_splat_experiment",
+                    },
+                    supports_full_run=False,
+                    supports_region_pair=False,
+                    stage="anchor_to_mask",
+                    layer_group=str(
+                        payload.get("layerGroup")
+                        or (
+                            "frame_proposals"
+                            if is_proposal_preview
+                            else "refined_masks"
+                        )
+                    ),
+                    label_space=label_space,
+                    read_only=True,
+                ),
+                session=object(),
+                availability_check=lambda path=summary_path: (
+                    (True, "Ready")
+                    if path.is_file()
+                    else (False, "Split&Splat layer summary is missing.")
+                ),
+            )
+        )
+    return backends
+
+
+def discover_split_splat_layer_status(work_root: Path) -> list[dict[str, Any]]:
+    """Discover read-only Split&Splat layers created after editor startup."""
+    return [
+        backend.status()
+        for backend in _discover_split_splat_backends(work_root)
+    ]
 
 
 def normalize_method_id(value: str) -> str:

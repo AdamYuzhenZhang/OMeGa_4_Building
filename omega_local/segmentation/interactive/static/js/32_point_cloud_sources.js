@@ -188,6 +188,7 @@ async function setEvidencePointCloudVisible(sourceId, visible) {
   const layer = evidencePointLayer(sourceId);
   layer.visible = Boolean(visible);
   if (layer.visible) {
+    deactivateGaussianViewport({ redraw: false });
     try {
       await loadEvidencePointCloud(sourceId, layer.mode);
     } catch (error) {
