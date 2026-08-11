@@ -29,6 +29,12 @@ _STAGES = (
     ),
 )
 _ITERATION_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
+_OBJECTGS_STAGES = (
+    ("prepare", "Prepare", Path("01_dataset/stage.json")),
+    ("train", "Train Joint Scene", Path("03_model/stage.json")),
+    ("export", "Export", Path("04_outputs/stage.json")),
+    ("mesh", "Object Meshes", Path("05_meshes/stage.json")),
+)
 
 
 def discover_mapanything_runs(interactive_dir: Path) -> list[dict[str, Any]]:
@@ -46,6 +52,140 @@ def discover_mapanything_runs(interactive_dir: Path) -> list[dict[str, Any]]:
         rows.append(_mapanything_status(run_dir, manifest))
     rows.sort(key=lambda row: str(row.get("updatedUtc") or ""), reverse=True)
     return rows
+
+
+def discover_objectgs_runs(interactive_dir: Path) -> list[dict[str, Any]]:
+    """Discover joint ObjectGS runs nested under MapAnything experiments."""
+    root = (
+        interactive_dir
+        / "experiments"
+        / "mapanything_region_3dgs"
+        / "runs"
+    )
+    rows = []
+    for source_run in sorted(root.glob("*")):
+        objectgs_root = source_run / "04_shared_objectgs" / "runs"
+        for run_dir in sorted(objectgs_root.glob("*")):
+            manifest = _read_json(run_dir / "run.json")
+            if not manifest:
+                continue
+            rows.append(_objectgs_status(run_dir, manifest))
+    rows.sort(key=lambda row: str(row.get("updatedUtc") or ""), reverse=True)
+    return rows
+
+
+def _objectgs_status(
+    run_dir: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    progress = _read_json(run_dir / "progress.json")
+    stages = []
+    first_incomplete = None
+    for index, (stage_id, display_name, relative) in enumerate(
+        _OBJECTGS_STAGES
+    ):
+        complete = _read_json(run_dir / relative).get("status") == "complete"
+        if first_incomplete is None and not complete:
+            first_incomplete = index
+        stages.append(
+            {
+                "stageId": stage_id,
+                "displayName": display_name,
+                "complete": complete,
+                "status": "complete" if complete else "pending",
+            }
+        )
+    if first_incomplete is None:
+        first_incomplete = len(stages)
+
+    iterations = max(int(manifest.get("iterations", 30_000)), 1)
+    message = str(progress.get("message") or "")
+    current_iteration = 0
+    match = _ITERATION_RE.search(message)
+    if match:
+        current_iteration = min(int(match.group(1)), iterations)
+    elif (run_dir / "logs" / "train.log").is_file():
+        try:
+            matches = _ITERATION_RE.findall(
+                _read_text_tail(run_dir / "logs" / "train.log")
+            )
+            if matches:
+                current_iteration = min(int(matches[-1][0]), iterations)
+        except OSError:
+            pass
+    train_fraction = current_iteration / iterations
+    if stages[1]["complete"]:
+        current_iteration = iterations
+        train_fraction = 1.0
+
+    progress_status = str(progress.get("status") or "")
+    complete = all(row["complete"] for row in stages)
+    failed = progress_status == "failed"
+    running = progress_status == "running" and not complete and not failed
+    active_stage = (
+        first_incomplete if first_incomplete < len(stages) else -1
+    )
+    if active_stage >= 0:
+        stages[active_stage]["status"] = (
+            "failed" if failed else "running" if running else "pending"
+        )
+
+    stage_fraction = train_fraction if active_stage == 1 else 0.0
+    overall_fraction = min(
+        (sum(row["complete"] for row in stages) + stage_fraction)
+        / len(stages),
+        1.0,
+    )
+    if complete:
+        overall_fraction = 1.0
+    if active_stage == 1 and current_iteration:
+        display_message = (
+            f"Joint scene · {current_iteration}/{iterations} · "
+            f"{round(100 * train_fraction)}%"
+        )
+    elif active_stage >= 0:
+        display_message = stages[active_stage]["displayName"]
+    else:
+        display_message = "Complete"
+    if failed:
+        display_message = message or "Pipeline failed"
+
+    mapanything_run_id = str(manifest.get("mapanythingRunId") or "")
+    objectgs_run_id = str(manifest.get("runId") or run_dir.name)
+    return {
+        "runId": objectgs_run_id,
+        "savedRunId": (
+            f"{mapanything_run_id}_{objectgs_run_id}_anchors"
+        ),
+        "mapanythingRunId": mapanything_run_id,
+        "displayName": f"ObjectGS Joint · {mapanything_run_id}",
+        "runDir": str(run_dir),
+        "status": (
+            "complete"
+            if complete
+            else "failed"
+            if failed
+            else "running"
+            if running
+            else "paused"
+        ),
+        "running": running,
+        "failed": failed,
+        "complete": complete,
+        "message": display_message,
+        "detailMessage": message,
+        "updatedUtc": str(
+            progress.get("updatedUtc")
+            or manifest.get("updatedUtc")
+            or datetime.now(timezone.utc).isoformat()
+        ),
+        "stageIndex": active_stage,
+        "stageCount": len(stages),
+        "overallProgress": round(100.0 * overall_fraction, 2),
+        "stages": stages,
+        "currentIteration": current_iteration,
+        "currentIterationTotal": iterations,
+    }
 
 
 def live_mapanything_experiment(
@@ -290,6 +430,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (json.JSONDecodeError, OSError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _read_text_tail(path: Path, byte_count: int = 262_144) -> str:
+    with path.open("rb") as stream:
+        stream.seek(0, 2)
+        size = stream.tell()
+        stream.seek(max(0, size - max(int(byte_count), 1)))
+        return stream.read().decode("utf-8", errors="replace")
 
 
 def _display_name(run_id: str) -> str:

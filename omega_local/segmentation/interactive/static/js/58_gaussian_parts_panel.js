@@ -24,7 +24,9 @@ function gaussianPartLoadStatus(part) {
 function renderGaussianPartPanel() {
   if (!idPanel || !regionList || !idList || !gaussianPartSceneActive()) return false;
   const scene = state.gaussianViewportScene;
-  const parts = Array.isArray(scene.parts) ? scene.parts : [];
+  const parts = Array.isArray(scene.controls) && scene.controls.length
+    ? scene.controls
+    : Array.isArray(scene.parts) ? scene.parts : [];
   const visibleCount = parts.filter((part) => (
     state.gaussianViewportPartVisibility[String(part.partId || part.variantId)] !== false
   )).length;

@@ -816,6 +816,7 @@ def test_segmentation3d_manager_serves_registered_npz_cache(tmp_path: Path) -> N
     np.savez_compressed(
         cache_path,
         points=np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32),
+        colors=np.array([[10, 20, 30], [40, 50, 60]], dtype=np.uint8),
         labels=np.array([7, 9], dtype=np.int32),
     )
     (run_dir / "experiment.json").write_text(
@@ -836,6 +837,7 @@ def test_segmentation3d_manager_serves_registered_npz_cache(tmp_path: Path) -> N
     assert payload["pointCount"] == 2
     assert payload["labelCount"] == 2
     assert payload["positions"] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert payload["colors"] == [10, 20, 30, 40, 50, 60]
 
 
 def test_split_labels_preserve_gaussian_geometry_and_replace_color(

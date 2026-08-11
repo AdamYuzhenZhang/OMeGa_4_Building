@@ -204,12 +204,22 @@ async function loadFrameProposalLayers(frameId) {
   if (typeof loadActiveRegionOverlay === "function") {
     await loadActiveRegionOverlay(frameId);
   }
+  if (typeof loadActiveGaussianFlatsPlaneMask === "function") {
+    await loadActiveGaussianFlatsPlaneMask(frameId);
+  }
   await loadProposalSelectionOverlay();
 }
 
 function selectedFrameBackgroundUrl(frame) {
   const mode = state.frameBackgroundMode || "rgb";
   if (mode === "rgb") return frame.imageUrl;
+  if (mode.startsWith("objectgs:")) {
+    const runId = mode.slice("objectgs:".length);
+    return datasetUrl(
+      `/api/3d-segmentation/runs/${encodeURIComponent(runId)}` +
+      `/objectgs-rgb/${Number(frame.id)}.png`,
+    );
+  }
   if (!viewEvidenceReady() || !viewEvidenceModeReady(mode)) return frame.imageUrl;
   return viewEvidenceImageUrl(frame.id, mode);
 }

@@ -59,7 +59,7 @@ function gaussianPartSceneActive() {
     scene &&
     Array.isArray(scene.parts) &&
     (
-      scene.parts.length > 1 ||
+      (Array.isArray(scene.controls) ? scene.controls : scene.parts).length > 1 ||
       (Array.isArray(scene.colorModes) && scene.colorModes.length > 1)
     )
   );
@@ -79,7 +79,10 @@ function initializeGaussianPartState(scene, preserve = false) {
   const previous = preserve ? state.gaussianViewportPartVisibility : {};
   state.gaussianViewportPartVisibility = {};
   state.gaussianViewportPartProgress = {};
-  for (const part of scene.parts || []) {
+  const controls = Array.isArray(scene.controls) && scene.controls.length
+    ? scene.controls
+    : scene.parts || [];
+  for (const part of controls) {
     const partId = String(part.partId || part.variantId);
     state.gaussianViewportPartVisibility[partId] = Object.hasOwn(previous, partId)
       ? Boolean(previous[partId])
@@ -94,6 +97,9 @@ async function activateGaussianViewport(runId, variantId) {
     throw new Error(`Gaussian artifact ${runId}/${variantId} is not registered.`);
   }
   await requireGaussianViewer();
+  if (typeof deactivateMeshViewport === "function") {
+    deactivateMeshViewport({ redraw: false });
+  }
   const scene = await loadJson(gaussianSceneManifestUrl(runId, variantId));
   if (!Array.isArray(scene.parts) || !scene.parts.length) {
     throw new Error(`Gaussian scene ${runId}/${variantId} contains no renderable parts.`);
@@ -305,14 +311,20 @@ function handleGaussianViewportMessage(event) {
     state.gaussianViewportProgress = Number(message.progress) || 0;
     syncReconstructionResultLists();
   } else if (message.type === "part-progress") {
-    const partId = String(message.partId || "");
-    if (partId) state.gaussianViewportPartProgress[partId] = Number(message.progress) || 0;
+    const partId = String(message.controlPartId || message.partId || "");
+    if (partId) {
+      state.gaussianViewportPartProgress[partId] = Number(
+        message.controlProgress ?? message.progress
+      ) || 0;
+    }
     state.gaussianViewportProgress = Number(message.sceneProgress) || 0;
     syncReconstructionResultLists();
     renderIdPanel();
   } else if (message.type === "part-ready") {
-    const partId = String(message.partId || "");
-    if (partId) state.gaussianViewportPartProgress[partId] = 100;
+    const partId = String(message.controlPartId || message.partId || "");
+    if (partId && Number(state.gaussianViewportPartProgress[partId]) >= 99.5) {
+      state.gaussianViewportPartProgress[partId] = 100;
+    }
     renderIdPanel();
   } else if (message.type === "color-progress") {
     state.gaussianViewportColorSwitching = true;

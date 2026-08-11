@@ -206,7 +206,9 @@ function scheduleMapAnythingPipelinePolling(delay = 900) {
     } catch (error) {
       console.error(error);
     }
-    const running = mapAnythingPipelineRuns().some((run) => run.running);
+    const running = mapAnythingPipelineRuns().some((run) => run.running) ||
+      (typeof objectgsPipelineRuns === "function" && objectgsPipelineRuns().some((run) => run.running)) ||
+      (typeof gaussianFlatsPipelineRuns === "function" && gaussianFlatsPipelineRuns().some((run) => run.running));
     mapAnythingPipelinePollTimer = setTimeout(
       poll,
       document.hidden ? 8000 : running ? 1200 : 5000,

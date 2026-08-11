@@ -2,6 +2,7 @@
 const canvas = document.getElementById("viewer");
 const ctx = canvas.getContext("2d", { alpha: true });
 const gaussianViewportFrame = document.getElementById("gaussianViewport");
+const meshViewportFrame = document.getElementById("meshViewport");
 const statusEl = document.getElementById("projectStatus");
 const datasetSelect = document.getElementById("datasetSelect");
 const hud = document.getElementById("viewerHud");
@@ -84,6 +85,12 @@ const splitSplatResultsEl = document.getElementById("splitSplatResults");
 const splitSplatResultSummaryEl = document.getElementById("splitSplatResultSummary");
 const mapAnything3dgsResultsEl = document.getElementById("mapAnything3dgsResults");
 const mapAnything3dgsResultSummaryEl = document.getElementById("mapAnything3dgsResultSummary");
+const objectgsResultsEl = document.getElementById("objectgsResults");
+const objectgsResultSummaryEl = document.getElementById("objectgsResultSummary");
+const gaussianFlatsResultsEl = document.getElementById("gaussianFlatsResults");
+const gaussianFlatsResultSummaryEl = document.getElementById("gaussianFlatsResultSummary");
+const staticSemanticResultsEl = document.getElementById("staticSemanticResults");
+const staticSemanticResultSummaryEl = document.getElementById("staticSemanticResultSummary");
 const segmentation3dMethodInput = document.getElementById("segmentation3dMethod");
 const segmentation3dInput = document.getElementById("segmentation3dInput");
 const segmentation3dSourceField = document.getElementById("segmentation3dSourceField");
@@ -199,6 +206,14 @@ const state = {
   activeRegionId: 0,
   regionOverlayImages: new Map(),
   regionOverlayImage: null,
+  gaussianFlatsPlaneMask: {
+    visible: false,
+    runId: "",
+    variantId: "",
+    contentVersion: "",
+    image: null,
+    images: new Map(),
+  },
   regionBusy: false,
   selectedProposalIds: new Set(),
   activeProposalId: 0,
@@ -263,6 +278,17 @@ const state = {
   gaussianViewportColorProgress: 100,
   gaussianViewportPartVisibility: {},
   gaussianViewportPartProgress: {},
+  meshViewportRunId: "",
+  meshViewportVariantId: "",
+  meshViewportLoadedKey: "",
+  meshViewportVisible: false,
+  meshViewportReady: false,
+  meshViewportProgress: 0,
+  meshViewportError: "",
+  meshViewportScene: null,
+  meshViewportColorMode: "",
+  meshViewportPartVisibility: {},
+  meshViewportPartProgress: {},
   propagationMethodId: "",
   sourceRefinementMethodId: "",
   regionPairMethodId: "vggts_pair",

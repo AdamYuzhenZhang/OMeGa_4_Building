@@ -40,6 +40,9 @@ function currentPreviewImages() {
   } else if (state.proposalOverlayImage) {
     images.push(state.proposalOverlayImage);
   }
+  if (state.gaussianFlatsPlaneMask.visible && state.gaussianFlatsPlaneMask.image) {
+    images.push(state.gaussianFlatsPlaneMask.image);
+  }
   if (state.showRegions && state.regionOverlayImage) images.push(state.regionOverlayImage);
   if (state.rgbdDebugOverlayImage) images.push(state.rgbdDebugOverlayImage);
   if (state.proposalSelectionOverlayImage) images.push(state.proposalSelectionOverlayImage);
@@ -59,6 +62,7 @@ function previewExportLayerSuffix() {
   const layers = visibleProposalLayers();
   const parts = [];
   if (layers.length) parts.push(layers.join("-"));
+  if (state.gaussianFlatsPlaneMask.visible) parts.push("plane-mask");
   if (state.showRegions) parts.push("regions");
   if (state.proposalSelectionOverlayImage) parts.push("selection");
   if (!parts.length) return "rgb";

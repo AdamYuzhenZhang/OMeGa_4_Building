@@ -449,6 +449,19 @@ def create_app(
             StaticFiles(directory=supersplat_public),
             name="supersplat",
         )
+    playcanvas_build = (
+        THIRD_PARTY_ROOT
+        / "supersplat-viewer"
+        / "node_modules"
+        / "playcanvas"
+        / "build"
+    )
+    if (playcanvas_build / "playcanvas.mjs").is_file():
+        app.mount(
+            "/vendor/playcanvas",
+            StaticFiles(directory=playcanvas_build),
+            name="playcanvas",
+        )
 
     @app.middleware("http")
     async def no_cache_editor_assets(request: Request, call_next):
@@ -573,6 +586,23 @@ def create_app(
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/objectgs-rgb/{frame_id}.png"
+    )
+    def segmentation3d_objectgs_rgb(
+        run_id: str,
+        frame_id: int,
+    ) -> FileResponse:
+        try:
+            path = state.segmentation3d.objectgs_rgb_render(run_id, frame_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
     @app.get("/api/3d-segmentation/viewer/status")
     def segmentation3d_viewer_status() -> Response:
         return _json_response(viewer_status(supersplat_public))
@@ -582,20 +612,23 @@ def create_app(
         return _json_response(viewer_settings())
 
     @app.get(
-        "/api/3d-segmentation/runs/{run_id}/gaussians/{variant_id}.ply"
+        "/api/3d-segmentation/runs/{run_id}/gaussians/{variant_id}.{extension}"
     )
     def segmentation3d_gaussian_artifact(
         run_id: str,
         variant_id: str,
+        extension: str,
     ) -> FileResponse:
         try:
             path = state.segmentation3d.gaussian_artifact(run_id, variant_id)
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if path.suffix.lower() != f".{extension.lower()}":
+            raise HTTPException(status_code=404, detail="Gaussian format does not match the artifact.")
         return FileResponse(
             path,
             media_type="application/octet-stream",
-            filename=f"{run_id}_{variant_id}.ply",
+            filename=f"{run_id}_{variant_id}{path.suffix.lower()}",
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",
             },
@@ -614,6 +647,65 @@ def create_app(
             )
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/plane-masks/{variant_id}/{frame_id}.png"
+    )
+    def segmentation3d_plane_mask_artifact(
+        run_id: str,
+        variant_id: str,
+        frame_id: int,
+    ) -> FileResponse:
+        try:
+            path = state.segmentation3d.plane_mask_artifact(
+                run_id,
+                variant_id,
+                frame_id,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/mesh-scenes/{variant_id}.json"
+    )
+    def segmentation3d_mesh_scene(
+        run_id: str,
+        variant_id: str,
+    ) -> Response:
+        try:
+            return _json_response(
+                state.segmentation3d.mesh_scene(run_id, variant_id)
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get(
+        "/api/3d-segmentation/runs/{run_id}/meshes/{variant_id}/{part_id}.glb"
+    )
+    def segmentation3d_mesh_artifact(
+        run_id: str,
+        variant_id: str,
+        part_id: str,
+    ) -> FileResponse:
+        try:
+            path = state.segmentation3d.mesh_artifact(
+                run_id,
+                variant_id,
+                part_id,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="model/gltf-binary",
+            filename=f"{run_id}_{part_id}.glb",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/api/view-evidence/status")
     def view_evidence_status() -> Response:

@@ -85,6 +85,9 @@ function splitSplatLayer(baseRunId, suffix = "") {
 function syncReconstructionResultLists() {
   syncSplitSplatResultList();
   syncMapAnything3dgsResultList();
+  if (typeof syncObjectgsResultList === "function") syncObjectgsResultList();
+  if (typeof syncStaticSemanticResultList === "function") syncStaticSemanticResultList();
+  if (typeof syncGaussianFlatsResultList === "function") syncGaussianFlatsResultList();
 }
 
 function appendSplitSplatSection(group, label) {
@@ -288,6 +291,7 @@ function syncSplitSplatResultList() {
       (artifact) => String(artifact.variantId) === "appearance",
     );
     if (appearance) group.appendChild(gaussianArtifactControl(sharedRun, appearance, "Global RGB 3DGS"));
+    group.appendChild(segmentation3dPointControl(sharedRun, "Global RGB Centers"));
     splitSplatResultsEl.appendChild(group);
   }
   for (const experiment of experiments) appendSplitSplatExperiment(experiment);

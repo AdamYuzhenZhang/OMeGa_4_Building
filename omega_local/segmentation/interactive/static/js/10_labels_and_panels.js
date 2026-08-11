@@ -345,7 +345,9 @@ function sortButtonGroup(label, buttons) {
 
 function renderIdPanel() {
   if (!idList) return;
+  if (typeof renderMeshPartPanel === "function" && renderMeshPartPanel()) return;
   if (typeof renderGaussianPartPanel === "function" && renderGaussianPartPanel()) return;
+  if (typeof renderObjectgsAnchorPanel === "function" && renderObjectgsAnchorPanel()) return;
   if (idPanel) idPanel.classList.remove("gaussian-part-mode");
   if (regionList) regionList.classList.remove("gaussian-part-list");
   if (typeof renderRegionPanel === "function") {

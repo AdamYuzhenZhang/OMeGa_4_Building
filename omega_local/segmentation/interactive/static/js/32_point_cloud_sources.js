@@ -189,6 +189,9 @@ async function setEvidencePointCloudVisible(sourceId, visible) {
   layer.visible = Boolean(visible);
   if (layer.visible) {
     deactivateGaussianViewport({ redraw: false });
+    if (typeof deactivateMeshViewport === "function") {
+      deactivateMeshViewport({ redraw: false });
+    }
     try {
       await loadEvidencePointCloud(sourceId, layer.mode);
     } catch (error) {

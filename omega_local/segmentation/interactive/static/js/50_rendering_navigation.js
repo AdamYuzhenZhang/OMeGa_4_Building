@@ -42,6 +42,13 @@ function drawFrameLayers(camera, layout, view, drawBackground = true) {
     drawSourceImage(state.proposalOverlayImage, camera);
   }
   if (
+    state.gaussianFlatsPlaneMask.visible &&
+    state.gaussianFlatsPlaneMask.image &&
+    state.gaussianFlatsPlaneMask.image.complete
+  ) {
+    drawSourceImage(state.gaussianFlatsPlaneMask.image, camera);
+  }
+  if (
     state.showRegions &&
     state.regionOverlayImage &&
     state.regionOverlayImage.complete
@@ -80,11 +87,22 @@ function drawPoints(camera, layout) {
 function drawEvidencePoints(layer, camera, layout) {
   const positions = layer.positions;
   const colors = layer.colors;
+  const labels = layer.labels;
+  const visibility = layer.regionVisibility || null;
   if (!positions.length) return;
   const size = Math.max(1, state.pointSize * 0.72 * (window.devicePixelRatio || 1));
   let activeColor = -1;
   ctx.save();
   for (let j = 0; j < positions.length; j += 3) {
+    const pointIndex = j / 3;
+    if (
+      labels &&
+      labels.length === positions.length / 3 &&
+      visibility &&
+      visibility[String(labels[pointIndex])] === false
+    ) {
+      continue;
+    }
     const projected = project([positions[j], positions[j + 1], positions[j + 2]], camera);
     if (!projected) continue;
     const x = layout.x0 + projected.u * layout.scale;
@@ -185,8 +203,10 @@ function drawPromptDots(prompts, camera, layout, frameView, radius, kind) {
 function render() {
   syncCanvasSize();
   const gaussianVisible = gaussianViewportVisible();
+  const meshVisible = typeof meshViewportVisible === "function" && meshViewportVisible();
+  const embedded3dVisible = gaussianVisible || meshVisible;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!gaussianVisible) {
+  if (!embedded3dVisible) {
     ctx.fillStyle = "#070809";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
@@ -201,7 +221,7 @@ function render() {
   const frameView = state.exactFrameView && state.selectedFrame
     ? ensureFrameView(state.camera, state.selectedFrame.id)
     : null;
-  drawFrameLayers(state.camera, layout, frameView, !gaussianVisible);
+  drawFrameLayers(state.camera, layout, frameView, !embedded3dVisible);
   for (const layer of Object.values(state.evidencePointClouds)) {
     if (layer.visible) drawEvidencePoints(layer, camera, layout);
   }
@@ -213,6 +233,7 @@ function render() {
   drawRgbdCuePrompts(state.camera, layout, frameView);
   drawLassoOverlay();
   if (gaussianVisible) syncGaussianViewportCamera(camera, layout);
+  if (meshVisible) syncMeshViewportCamera(camera, layout);
 
   const activeSamPromptCount = state.selectedFrame
     ? state.samPrompts.filter((prompt) => Number(prompt.frameId) === Number(state.selectedFrame.id)).length
@@ -239,6 +260,9 @@ function render() {
       (row) => String(row.variantId) === String(state.gaussianViewportVariantId)
     );
     items.push(`3DGS ${variant ? (variant.displayName || variant.variantId) : state.gaussianViewportVariantId}`);
+  }
+  if (meshVisible) {
+    items.push(`Mesh ${state.meshViewportScene?.displayName || state.meshViewportVariantId}`);
   }
   for (const [sourceId, layer] of Object.entries(state.evidencePointClouds)) {
     if (!layer.visible) continue;

@@ -70,6 +70,34 @@ function mapAnything3dgsRuns() {
   );
 }
 
+function objectgsSegmentationRuns() {
+  return savedSegmentation3dRuns().filter(
+    (run) => String(run.experimentFamily) === "mapanything_objectgs",
+  );
+}
+
+function gaussianFlatsRuns() {
+  return savedSegmentation3dRuns().filter(
+    (run) => String(run.experimentFamily) === "gaussian_flats",
+  );
+}
+
+function segmentation3dPlaneMaskArtifacts(run) {
+  return run && Array.isArray(run.planeMaskArtifacts) ? run.planeMaskArtifacts : [];
+}
+
+function gaussianFlatsPipelineRuns() {
+  const rows = state.segmentation3dStatus &&
+    state.segmentation3dStatus.gaussianFlatsPipelines;
+  return Array.isArray(rows) ? rows : [];
+}
+
+function objectgsPipelineRuns() {
+  const rows = state.segmentation3dStatus &&
+    state.segmentation3dStatus.objectgsPipelines;
+  return Array.isArray(rows) ? rows : [];
+}
+
 function mapAnythingPipelineRuns() {
   const rows = state.segmentation3dStatus &&
     state.segmentation3dStatus.reconstructionPipelines;
@@ -90,6 +118,8 @@ function segmentation3dResultLayer(run, create = true) {
       result: null,
       positions: new Float32Array(),
       colors: new Uint8Array(),
+      labels: new Uint16Array(),
+      regionVisibility: {},
       busy: false,
       displayName: segmentation3dRunDisplayName(run),
     };
@@ -165,9 +195,13 @@ function syncSegmentation3dResultList() {
   const runs = sai3dSegmentationRuns();
   const pointRuns = [
     ...runs,
+    ...splitSplatSegmentationRuns().filter(
+      (run) => ["shared_global", "split_labels"].includes(String(run.artifactRole)),
+    ),
     ...mapAnything3dgsRuns().filter(
       (run) => String(run.artifactRole) === "split_labels",
     ),
+    ...objectgsSegmentationRuns(),
   ];
   const validKeys = new Set(pointRuns.map((run) => segmentation3dResultLayerKey(run.runId)));
   for (const key of Object.keys(state.evidencePointClouds)) {
@@ -228,6 +262,47 @@ function syncSegmentation3dResultList() {
   }
   syncReconstructionResultLists();
   syncMapAnything3dgsResultList();
+}
+
+function segmentation3dPointControl(run, displayName = "") {
+  const layer = segmentation3dResultLayer(run);
+  const row = document.createElement("label");
+  row.className = "control checkbox point-source-row";
+  row.title = [
+    run.runDir || "",
+    Number(run.pointCount) > 0
+      ? `${formatCount(Number(run.pointCount))} points`
+      : `${segmentation3dPointBudgetLabel(run.pointBudget)} points`,
+  ].filter(Boolean).join(" | ");
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = Boolean(layer.visible);
+  input.disabled = Boolean(layer.busy);
+  input.addEventListener("change", () => {
+    setSegmentation3dResultVisible(run.runId, input.checked).catch((error) => {
+      console.error(error);
+      layer.visible = false;
+      syncSegmentation3dResultList();
+    });
+  });
+
+  const name = document.createElement("span");
+  name.className = "point-source-name";
+  name.textContent = displayName || segmentation3dRunDisplayName(run);
+
+  const status = document.createElement("span");
+  status.className = "step-status";
+  status.textContent = layer.busy
+    ? "Loading"
+    : layer.visible && layer.result
+      ? `${formatCount(layer.result.servedPointCount)} shown`
+      : Number(run.pointCount) > 0
+        ? formatCount(Number(run.pointCount))
+        : segmentation3dPointBudgetLabel(run.pointBudget);
+
+  row.append(input, name, status);
+  return row;
 }
 
 function fillSegmentation3dSelect(
@@ -449,10 +524,14 @@ async function setSegmentation3dResultVisible(runId, visible) {
   if (!visible) {
     layer.visible = false;
     syncSegmentation3dResultList();
+    renderIdPanel();
     render();
     return;
   }
   deactivateGaussianViewport({ redraw: false });
+  if (typeof deactivateMeshViewport === "function") {
+    deactivateMeshViewport({ redraw: false });
+  }
   layer.busy = true;
   syncSegmentation3dResultList();
   try {
@@ -461,19 +540,35 @@ async function setSegmentation3dResultVisible(runId, visible) {
       layer.result = {
         positions: Float32Array.from(payload.positions || []),
         colors: Uint8Array.from(payload.colors || []),
+        labels: Uint16Array.from(payload.labels || []),
+        regions: Array.isArray(payload.regions) ? payload.regions : [],
         pointCount: Number(payload.pointCount) || 0,
         servedPointCount: Number(payload.servedPointCount) || 0,
       };
       if (layer.result.positions.length !== layer.result.colors.length) {
         throw new Error(`${run.runId} point positions and RGB colors have different lengths.`);
       }
+      if (
+        layer.result.labels.length &&
+        layer.result.labels.length !== layer.result.positions.length / 3
+      ) {
+        throw new Error(`${run.runId} point positions and region labels have different lengths.`);
+      }
     }
     layer.positions = layer.result.positions;
     layer.colors = layer.result.colors;
+    layer.labels = layer.result.labels;
+    for (const region of layer.result.regions) {
+      const regionId = String(Number(region.id) || 0);
+      if (!Object.hasOwn(layer.regionVisibility, regionId)) {
+        layer.regionVisibility[regionId] = true;
+      }
+    }
     layer.visible = true;
   } finally {
     layer.busy = false;
     syncSegmentation3dResultList();
+    renderIdPanel();
     render();
   }
 }

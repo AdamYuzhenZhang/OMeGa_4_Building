@@ -821,6 +821,8 @@ def _register_canonical_mask_layer(
     canonical_run_dir: Path,
     canonical_summary: Path,
     stage: str,
+    engine_name: str = "Split&Splat",
+    proposal_kind: str | None = None,
 ) -> None:
     layer_dir = (
         editor_paths.interactive_dir
@@ -831,7 +833,7 @@ def _register_canonical_mask_layer(
     layer_dir.mkdir(parents=True, exist_ok=True)
     replace_symlink(layer_dir / "label_maps", label_maps)
     replace_symlink(layer_dir / "overlays", overlays)
-    proposal_kind = (
+    proposal_kind = proposal_kind or (
         "anchored_persistent_region"
         if label_namespace == "persistent_region"
         else "split_splat_instance"
@@ -874,7 +876,7 @@ def _register_canonical_mask_layer(
         "timestampUtc": now_utc(),
         "methodId": method_id,
         "displayName": display_name,
-        "engineName": "Split&Splat",
+        "engineName": engine_name,
         "description": description,
         "labelSpace": label_namespace,
         "layerGroup": "refined_masks",
@@ -892,10 +894,15 @@ def _register_canonical_mask_layer(
             "status": "complete",
             "running": False,
             "failed": False,
-            "message": f"Split&Splat mask layer ready: {display_name}",
+            "message": f"{engine_name} mask layer ready: {display_name}",
             "updatedUtc": now_utc(),
         },
     )
+
+
+def register_canonical_mask_layer(**kwargs: Any) -> None:
+    """Register a read-only canonical mask layer for a staged experiment."""
+    _register_canonical_mask_layer(**kwargs)
 
 
 def _register_point_cloud_runs(
@@ -1038,16 +1045,78 @@ def _ensure_global_points_cache(
     global_cache = run_paths.global_points_cache
     if global_cache.is_file():
         with np.load(global_cache) as cached:
-            point_count = int(np.asarray(cached["points"]).shape[0])
-        return global_cache, point_count
-    global_points = _read_ply_points(run_paths.global_point_cloud)
+            points = np.asarray(cached["points"])
+            colors = (
+                np.asarray(cached["colors"])
+                if "colors" in cached.files
+                else None
+            )
+            color_mode = (
+                str(np.asarray(cached["colorMode"]).item())
+                if "colorMode" in cached.files
+                else ""
+            )
+            point_count = int(points.shape[0])
+        if (
+            colors is not None
+            and colors.shape == (point_count, 3)
+            and color_mode == "sh_dc_display_v1"
+        ):
+            return global_cache, point_count
+    global_points, global_colors = _read_gaussian_centers_rgb(
+        run_paths.global_point_cloud
+    )
     global_cache.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         global_cache,
         points=global_points.astype(np.float32),
+        colors=global_colors,
+        colorMode=np.asarray("sh_dc_display_v1"),
         labels=np.zeros(global_points.shape[0], dtype=np.int32),
     )
     return global_cache, int(global_points.shape[0])
+
+
+def _read_gaussian_centers_rgb(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read means and make DC SH colors legible as opaque display points.
+
+    Gaussian SH radiance can exceed the display range because splat rendering
+    alpha-composites many low-opacity contributions. Opaque point rendering
+    cannot reproduce that process, so use one robust scene exposure before
+    clipping while preserving relative RGB values.
+    """
+    from plyfile import PlyData
+
+    vertex = PlyData.read(path, mmap="r")["vertex"].data
+    names = set(vertex.dtype.names or ())
+    required = {"x", "y", "z"}
+    if not required.issubset(names):
+        raise ValueError(f"Gaussian PLY is missing XYZ properties: {path}")
+    points = np.column_stack(
+        [vertex["x"], vertex["y"], vertex["z"]]
+    ).astype(np.float32, copy=False)
+    if {"f_dc_0", "f_dc_1", "f_dc_2"}.issubset(names):
+        dc = np.column_stack(
+            [vertex["f_dc_0"], vertex["f_dc_1"], vertex["f_dc_2"]]
+        ).astype(np.float32, copy=False)
+        rgb = np.float32(0.28209479177387814) * dc + np.float32(0.5)
+        finite_values = rgb[np.isfinite(rgb)]
+        white_point = (
+            float(np.quantile(finite_values, 0.975))
+            if finite_values.size
+            else 1.0
+        )
+        exposure = min(1.0, 0.95 / max(white_point, 1e-6))
+        rgb = np.nan_to_num(rgb * np.float32(exposure), nan=0.0)
+        rgb = np.clip(rgb, 0.0, 1.0)
+        colors = np.rint(rgb * 255.0).astype(np.uint8)
+    elif {"red", "green", "blue"}.issubset(names):
+        colors = np.column_stack(
+            [vertex["red"], vertex["green"], vertex["blue"]]
+        ).astype(np.uint8, copy=False)
+    else:
+        colors = np.full((points.shape[0], 3), 210, dtype=np.uint8)
+    return points, colors
 
 
 def _read_ply_points(path: Path) -> np.ndarray:

@@ -73,6 +73,14 @@
           tabindex="-1"
           hidden
         ></iframe>
+        <iframe
+          id="meshViewport"
+          class="gaussian-viewport mesh-viewport"
+          title="Camera-aligned object meshes"
+          aria-hidden="true"
+          tabindex="-1"
+          hidden
+        ></iframe>
         <canvas id="viewer"></canvas>
         <aside id="idPanel" class="id-panel" aria-label="Proposal edits and segment IDs">
           <div id="regionList" class="region-list"></div>
@@ -181,6 +189,33 @@
                   </div>
                   <div id="mapAnything3dgsResults" class="point-result-list">
                     <span class="point-result-empty">Run MapAnything Split to generate region points</span>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Gaussian Flats</span>
+                    <span id="gaussianFlatsResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="gaussianFlatsResults" class="point-result-list">
+                    <span class="point-result-empty">Run Gaussian Flats to generate masks and meshes</span>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Shared ObjectGS</span>
+                    <span id="objectgsResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="objectgsResults" class="point-result-list">
+                    <span class="point-result-empty">Run ObjectGS from a MapAnything Split</span>
+                  </div>
+                </div>
+                <div class="prep-card">
+                  <div class="prep-card-head">
+                    <span>Joint Static 3DGS</span>
+                    <span id="staticSemanticResultSummary" class="step-status">No saved runs</span>
+                  </div>
+                  <div id="staticSemanticResults" class="point-result-list">
+                    <span class="point-result-empty">Run Segment then Splat or Gaussian Grouping</span>
                   </div>
                 </div>
                 <div class="prep-card">
@@ -513,9 +548,9 @@
         <div id="filmstrip" class="filmstrip"></div>
       </footer>
     </div>
-    <script src="/static/js/00_state_api_math.js?v=20260730-dataset-assets-1"></script>
+    <script src="/static/js/00_state_api_math.js?v=20260806-gaussian-flats-viewer-1"></script>
     <script src="/static/js/10_labels_and_panels.js?v=20260729-gaussian-parts"></script>
-    <script src="/static/js/20_viewport_camera.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/20_viewport_camera.js?v=20260806-gaussian-flats-viewer-1"></script>
     <script src="/static/js/30_phase12_controls.js?v=20260730-dataset-assets-1"></script>
     <script src="/static/js/32_point_cloud_sources.js?v=20260727-inplace-splats"></script>
     <script src="/static/js/35_phase12_services.js?v=20260720-propagation-registry"></script>
@@ -527,13 +562,18 @@
     <script src="/static/js/44_phase3_geometry_selection.js?v=20260716-memory-vos"></script>
     <script src="/static/js/46_propagation_preview.js?v=20260730-dataset-assets-1"></script>
     <script src="/static/js/47_persistent_regions.js?v=20260730-dataset-assets-1"></script>
-    <script src="/static/js/50_rendering_navigation.js?v=20260730-landscape-orbit-1"></script>
-    <script src="/static/js/54_segmentation3d.js?v=20260730-split-splat-cleanup-1"></script>
+    <script src="/static/js/50_rendering_navigation.js?v=20260806-gaussian-flats-viewer-1"></script>
+    <script src="/static/js/54_segmentation3d.js?v=20260806-gaussian-flats-viewer-1"></script>
     <script src="/static/js/59_split_splat_results.js?v=20260730-split-splat-cleanup-1"></script>
     <script src="/static/js/60_mapanything_results.js?v=20260730-split-splat-cleanup-1"></script>
-    <script src="/static/js/56_gaussian_viewer.js?v=20260730-dataset-assets-1"></script>
-    <script src="/static/js/58_gaussian_parts_panel.js?v=20260730-gaussian-color-switch-1"></script>
-    <script src="/static/js/55_export_preview.js?v=20260716-memory-vos"></script>
+    <script src="/static/js/61_objectgs_results.js?v=20260730-objectgs-viewer-1"></script>
+    <script src="/static/js/65_static_semantic_results.js?v=20260801-static-semantic-2"></script>
+    <script src="/static/js/66_gaussian_flats_results.js?v=20260811-native-outputs-1"></script>
+    <script src="/static/js/56_gaussian_viewer.js?v=20260811-responsive-chunks-1"></script>
+    <script src="/static/js/58_gaussian_parts_panel.js?v=20260811-responsive-chunks-1"></script>
+    <script src="/static/js/62_mesh_viewer.js?v=20260730-objectgs-mesh-1"></script>
+    <script src="/static/js/63_mesh_parts_panel.js?v=20260730-objectgs-mesh-1"></script>
+    <script src="/static/js/55_export_preview.js?v=20260806-gaussian-flats-viewer-1"></script>
     <script src="/static/js/90_events_bootstrap.js?v=20260730-frame-aspect-1"></script>
   </body>
 </html>

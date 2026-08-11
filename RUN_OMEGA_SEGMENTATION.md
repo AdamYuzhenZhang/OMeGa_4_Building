@@ -1,5 +1,7 @@
 # Run OMeGa Segmentation
 
+For the joint Segment then Splat and Gaussian Grouping reconstruction commands, see [STATIC_SEMANTIC_3DGS.md](STATIC_SEMANTIC_3DGS.md).
+
 This file keeps only the active segmentation pipeline:
 
 ```text
@@ -1150,6 +1152,87 @@ Refresh the editor after Split or Splat completes; Step 1
 shows the masks, projected point support, segmented points, composed scene, and
 individual trained regions under `MapAnything Region 3DGS`.
 
+### MapAnything Shared ObjectGS
+
+This branch keeps one jointly optimized, object-aware scene. It consumes the
+completed MapAnything Split contract, converts its persistent IDs to released
+ObjectGS indexed masks and fixed anchor identities, and trains RGB, geometry,
+and region ownership together. It is parallel to `03_splat` and does not alter
+the independent region models.
+
+```bash
+OBJECTGS_ROOT="$PROJECT_ROOT/third_party/ObjectGS"
+OBJECTGS_PYTHON="$PROJECT_ROOT/.venv_objectgs/bin/python"
+
+# One-time isolated environment and customized ObjectGS rasterizer build.
+bash "$OMEGA_BUILDING_ROOT/scripts/setup_objectgs_env.sh"
+
+OBJECTGS_COMMON=(
+  --model-dir "$OMEGA_RESULT_DIR"
+  --editor-baseline-name "$SEG_BASELINE"
+  --objectgs-root "$OBJECTGS_ROOT"
+  --python "$OBJECTGS_PYTHON"
+  --mapanything-run-id mapanything_sam2_video
+  --run-id objectgs_joint
+)
+
+"$OBJECTGS_PYTHON" \
+  "$OMEGA_BUILDING_ROOT/scripts/run_omega_objectgs.py" \
+  --stage all \
+  --iterations 30000 \
+  --semantic-loss-weight 0.1 \
+  --initializer-stride 1 \
+  --voxel-size 0.001 \
+  "${OBJECTGS_COMMON[@]}"
+```
+
+The released 3D-scene defaults use 30,000 iterations, semantic weight `0.1`,
+10 offsets per anchor, and voxel size `0.001`. Prepared data and trained output
+live under `04_shared_objectgs/runs/objectgs_joint/`. Completed stages are
+reused on rerun; use `--overwrite-stage` only when intentionally rebuilding the
+selected stage. Step 1 shows this branch beside `MapAnything Region 3DGS`: use
+`Final Neural RGB (Views)` for the official calibrated-view render, `Rendered
+Region IDs` for its semantic output, and `Neural Anchor Scaffold` for a 3D
+region-colored anchor field with per-object visibility controls. The native RGB model uses
+ObjectGS neural anchors, so free-camera RGB rendering still requires its
+Scaffold-GS renderer rather than the editor's explicit-splat viewer.
+
+Export the released per-object geometry after `export` is complete:
+
+```bash
+"$OBJECTGS_PYTHON" \
+  "$OMEGA_BUILDING_ROOT/scripts/run_omega_objectgs.py" \
+  --stage mesh \
+  --mesh-voxel-size 0.01 \
+  --mesh-clusters 10 \
+  --mesh-max-triangles 1000000 \
+  --overwrite-stage \
+  "${OBJECTGS_COMMON[@]}"
+```
+
+This follows ObjectGS `export_object_mesh.py`: each persistent region filters
+the learned anchor labels, renders object-only RGB and depth from every
+training camera, fuses those views with bounded Open3D TSDF, and keeps the ten
+largest connected components subject to the released 50-triangle floor. The
+adapter dispatches every label explicitly because the released script does not
+implement its documented `--query_label_id -1` loop for this model. It also
+avoids the 2DGS-only normal buffers that the released 3DGS renderer does not
+produce; those normals are not used by bounded TSDF.
+
+The released `2048` depth-range resolution resolves this metric scene at about
+`1.1 mm` and produced more than 100 million triangles for one building region.
+The adapter instead uses a consistent `1 cm` world-space voxel, integrates each
+rendered RGB-D frame directly into TSDF rather than retaining all 214 frames,
+and applies a one-million-triangle QEM cap after the released connected-
+component cleanup. Results resume per object under
+`05_meshes/objects/region_*/` and include a cleaned PLY plus a viewer-ready RGB
+GLB; multi-gigabyte raw TSDF meshes are not retained. In Step 1, turn on
+`Official Object Meshes`; the left panel can show or hide every object and
+switch the same geometry between fused RGB and persistent-region colors.
+After this one corrective run, omit `--overwrite-stage` to resume an interrupted
+export with unchanged settings. For a dataset without metric scale, pass
+`--mesh-voxel-size 0` and control the fallback with `--mesh-resolution`.
+
 ### Splat Both Split Results
 
 Run these only after the corresponding `split` stage completes. `all_splat`
@@ -1401,6 +1484,29 @@ The setup script rebuilds all released CUDA extensions for the isolated
 CPython 3.12 environment. The staged runner reuses
 `third_party/sam2/checkpoints/sam2.1_hiera_large.pt` through a symlink, so it
 does not download a duplicate checkpoint.
+
+## 3D Gaussian Flats Hybrid Baseline
+
+The released 3D Gaussian Flats bridge uses the existing COLMAP scene and all
+SAM2 Video persistent labels, but exposes only `Door` (region `6`) as a planar
+surface. Other regions remain free 3D Gaussians. Full method notes, paper
+parameters, output semantics, and stage commands are in
+[GAUSSIAN_FLATS.md](GAUSSIAN_FLATS.md).
+
+```bash
+cd "$DT_ROOT"
+$OMEGA_BUILDING_ROOT/scripts/setup_gaussian_flats_env.sh
+
+$PYTHON "$OMEGA_BUILDING_ROOT/scripts/run_omega_gaussian_flats.py" \
+  --stage all \
+  --model-dir "$OMEGA_RESULT_DIR" \
+  --planar-region Door
+```
+
+Preparation is cached and validates the official mask area/view thresholds.
+The trainer keeps only the final 30k model. An interrupted train is discarded
+and restarted cleanly by the same command; successful runs remove transient
+logs, checkpoints, and intermediate iterations.
 
 ### Export Persistent Masks
 

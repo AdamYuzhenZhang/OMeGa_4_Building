@@ -4,7 +4,10 @@ const BRIDGE_SOURCE = "omega-splat-embed";
 const CAMERA_MESSAGE = "omega-splat-camera";
 const VISIBILITY_MESSAGE = "omega-splat-visibility";
 const COLOR_MODE_MESSAGE = "omega-splat-color-mode";
-const LOAD_CONCURRENCY = 4;
+// PLY parsing happens on the browser main thread. Loading several large parts
+// concurrently can make the whole editor unresponsive even when the GPU has
+// enough memory for the finished scene.
+const LOAD_CONCURRENCY = 1;
 const COLOR_SWITCH_POINT_BUDGET = 125000;
 const COLOR_SWITCH_MAX_PARTS = 8;
 const parentWindow = window.parent;
@@ -29,8 +32,9 @@ async function fetchRequired(url, label, responseType, cache = "force-cache") {
 }
 
 function gaussianContentUrl(scene, part) {
+  const extension = String(part.contentExtension || ".ply");
   const base = `/api/3d-segmentation/runs/${encodeURIComponent(scene.runId)}` +
-    `/gaussians/${encodeURIComponent(part.variantId)}.ply`;
+    `/gaussians/${encodeURIComponent(part.variantId)}${extension}`;
   const versioned = part.contentVersion
     ? `${base}?v=${encodeURIComponent(part.contentVersion)}`
     : base;
@@ -126,10 +130,10 @@ function installPartColorControl(entity, part, mode) {
   if (!entity || !entity.gsplat || part.sourceColorMode !== "rgb") return;
   const color = normalizedRegionColor(part);
   if (!color) return;
-  entity.gsplat.setParameter("omegaRegionColor", color);
-  entity.gsplat.setParameter("omegaRegionMix", mode === "regions" ? 1 : 0);
-  entity.gsplat.setWorkBufferModifier(REGION_COLOR_MODIFIER);
-  entity.omegaRegionMode = mode;
+  entity.omegaRegionColor = color;
+  entity.omegaRegionModifierInstalled = false;
+  entity.omegaRegionMode = "rgb";
+  if (mode === "regions") setPartColorMode(entity, part, mode);
 }
 
 function setPartColorMode(entity, part, mode) {
@@ -140,6 +144,12 @@ function setPartColorMode(entity, part, mode) {
     entity.omegaRegionMode === mode
   ) {
     return false;
+  }
+  if (!entity.omegaRegionModifierInstalled) {
+    entity.gsplat.setParameter("omegaRegionColor", entity.omegaRegionColor);
+    entity.gsplat.setParameter("omegaRegionMix", 0);
+    entity.gsplat.setWorkBufferModifier(REGION_COLOR_MODIFIER);
+    entity.omegaRegionModifierInstalled = true;
   }
   entity.gsplat.setParameter("omegaRegionMix", mode === "regions" ? 1 : 0);
   entity.omegaRegionMode = mode;
@@ -165,13 +175,20 @@ async function start() {
     partId: String(part.partId || part.variantId),
   }));
   const partById = new Map(parts.map((part) => [part.partId, part]));
-  const bootstrap = [...parts].sort(
-    (a, b) => (Number(b.pointCount) || 0) - (Number(a.pointCount) || 0),
-  )[0];
-  const pending = parts.filter((part) => part.partId !== bootstrap.partId);
+  const controls = Array.isArray(scene.controls) && scene.controls.length
+    ? scene.controls
+    : parts;
+  const controlPartId = (part) => String(part.controlPartId || part.partId);
+  const orderedParts = [...parts].sort(
+    (a, b) => (Number(a.pointCount) || 0) - (Number(b.pointCount) || 0),
+  );
+  const bootstrap = orderedParts[0];
+  const pending = orderedParts.slice(1);
   const progress = new Map(parts.map((part) => [part.partId, 0]));
   const entities = new Map();
-  const desiredVisibility = new Map(parts.map((part) => [part.partId, true]));
+  const desiredVisibility = new Map(
+    controls.map((part) => [String(part.partId || part.variantId), true]),
+  );
   let desiredColorMode = String(scene.defaultColorMode || "rgb");
   let colorSwitchSerial = 0;
   const totalPoints = Math.max(
@@ -186,9 +203,22 @@ async function start() {
     for (const item of parts) {
       weighted += Math.max(Number(item.pointCount) || 0, 1) * (progress.get(item.partId) || 0);
     }
+    const controlId = controlPartId(part);
+    const controlled = parts.filter((item) => controlPartId(item) === controlId);
+    const controlPoints = controlled.reduce(
+      (sum, item) => sum + Math.max(Number(item.pointCount) || 0, 1),
+      0,
+    );
+    const controlWeighted = controlled.reduce(
+      (sum, item) => sum + Math.max(Number(item.pointCount) || 0, 1) *
+        (progress.get(item.partId) || 0),
+      0,
+    );
     notify("part-progress", {
       partId: part.partId,
       progress: bounded,
+      controlPartId: controlId,
+      controlProgress: controlPoints ? Math.round(controlWeighted / controlPoints) : bounded,
       sceneProgress: Math.round(weighted / totalPoints),
     });
   }
@@ -304,10 +334,14 @@ async function start() {
       externalCamera = message.camera || null;
       applyExternalCamera();
     } else if (message.type === VISIBILITY_MESSAGE) {
-      const partId = String(message.partId || "");
-      desiredVisibility.set(partId, Boolean(message.visible));
-      const entity = entities.get(partId);
-      if (entity) entity.enabled = Boolean(message.visible);
+      const requestedId = String(message.partId || "");
+      desiredVisibility.set(requestedId, Boolean(message.visible));
+      for (const [partId, entity] of entities) {
+        const part = partById.get(partId);
+        if (part && controlPartId(part) === requestedId) {
+          entity.enabled = Boolean(message.visible);
+        }
+      }
       app.renderNextFrame = true;
     } else if (message.type === COLOR_MODE_MESSAGE) {
       const mode = String(message.mode || scene.defaultColorMode || "rgb");
@@ -328,13 +362,19 @@ async function start() {
   const bootstrapEntity = app.root.findByName(`omega-part:${bootstrap.partId}`);
   if (!bootstrapEntity) throw new Error(`Loaded Gaussian part is missing: ${bootstrap.partId}`);
   installPartColorControl(bootstrapEntity, bootstrap, desiredColorMode);
-  bootstrapEntity.enabled = desiredVisibility.get(bootstrap.partId) !== false;
+  bootstrapEntity.enabled = desiredVisibility.get(controlPartId(bootstrap)) !== false;
   entities.set(bootstrap.partId, bootstrapEntity);
   reportPartProgress(bootstrap, 100);
-  notify("part-ready", { partId: bootstrap.partId });
+  notify("part-ready", {
+    partId: bootstrap.partId,
+    controlPartId: controlPartId(bootstrap),
+  });
   applyExternalCamera();
 
   await runPool(pending, async (part) => {
+    // Let the loaded bootstrap render and let input events run before parsing
+    // the next potentially large PLY.
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
     const request = await fetchGaussian(scene, part);
     const entity = await loadGsplat(
       app,
@@ -347,10 +387,13 @@ async function start() {
       (value) => reportPartProgress(part, value),
     );
     installPartColorControl(entity, part, desiredColorMode);
-    entity.enabled = desiredVisibility.get(part.partId) !== false;
+    entity.enabled = desiredVisibility.get(controlPartId(part)) !== false;
     entities.set(part.partId, entity);
     reportPartProgress(part, 100);
-    notify("part-ready", { partId: part.partId });
+    notify("part-ready", {
+      partId: part.partId,
+      controlPartId: controlPartId(part),
+    });
     app.renderNextFrame = true;
   }, LOAD_CONCURRENCY);
 

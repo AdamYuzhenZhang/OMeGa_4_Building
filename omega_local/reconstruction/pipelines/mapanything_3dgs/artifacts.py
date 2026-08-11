@@ -30,7 +30,7 @@ def register_split_artifacts(
     editor_paths: EditorPaths,
     summary: dict[str, Any],
 ) -> None:
-    _register_mask_layer(
+    register_mask_layer(
         editor_paths,
         method_id=f"{config.run_id}_split",
         display_name="MapAnything Identity-Cleaned Masks",
@@ -42,7 +42,7 @@ def register_split_artifacts(
         canonical_summary=paths.stage_summary("split"),
         layer_group="refined_masks",
     )
-    _register_mask_layer(
+    register_mask_layer(
         editor_paths,
         method_id=f"{config.run_id}_support",
         display_name="MapAnything Projected Region Support",
@@ -178,7 +178,7 @@ def register_splat_artifacts(
     }
 
 
-def _register_mask_layer(
+def register_mask_layer(
     editor_paths: EditorPaths,
     *,
     method_id: str,

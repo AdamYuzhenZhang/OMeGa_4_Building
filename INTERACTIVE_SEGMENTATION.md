@@ -1528,9 +1528,14 @@ Compatibility depends on what the downstream method expects:
   C additionally replaces released Split mask recovery with anchored 3D
   identity association so user-authored shapes and IDs survive. Instance
   reconstruction and composition remain useful downstream.
-- **Gaussian Grouping:** compatible through an adapter that renders stable
-  region IDs and confidence-weighted identity targets. Step 5 replaces the
-  SAM/DEVA pseudo-label source, not the Gaussian identity optimization.
+- **Segment then Splat:** compatible through an implemented adapter that
+  initializes hard per-Gaussian ownership from the labeled MapAnything points
+  and trains all persistent regions as one segmentation granularity.
+- **Gaussian Grouping:** compatible through an implemented adapter that renders
+  stable indexed region targets. Step 5 replaces the SAM/DEVA pseudo-label
+  source, not the released learned-identity optimization. Manual-frame weights
+  are retained as metadata because the native trainer has no per-view weighting
+  interface.
 - **Per-object 3DGS, 2DGS, and OMeGa:** direct once hard, soft, negative, and
   unknown pixels are kept distinct and Step 6 points are exported by region.
 - **SAGA:** not a literal drop-in. Its scale-gated affinity field is trained from
@@ -1547,6 +1552,8 @@ Compatibility depends on what the downstream method expects:
 | [ObjectSDF++](https://qianyiwu.github.io/objectsdf%2B%2B) | Posed RGB and instance masks | Jointly renders multiple object SDFs with occlusion-aware object opacity and an object-distinction regularizer | Whole-scene and separate object meshes | Separate object ownership still needs joint visibility and collision reasoning |
 | [RICO](https://arxiv.org/abs/2303.08605) | Posed RGB, semantic masks, monocular depth, and normals | Joint compositional SDF with object-background depth constraints and smoothness in unobserved space | Per-object and combined meshes | Depth/normal priors can regularize architectural regions, but indoor-background assumptions should not be copied blindly |
 | [Gaussian Object Carver](https://arxiv.org/html/2412.02075) | RGB, instance labels, monocular depth, and normals | One shared 3DGS with per-Gaussian semantics, followed by segmented point extraction and optional object completion | Shared scene, object point sets, and optional watertight object meshes | A shared scene can preserve context while still exporting object geometry; the announced code is not currently public |
+| [ObjectGS](https://arxiv.org/abs/2507.15454) | Posed RGB, indexed multi-view masks, and a labeled point initializer | One shared Scaffold-GS scene with fixed one-hot anchor IDs, ID-preserving growth/pruning, and scene-level semantic cross-entropy | Joint RGB scene, rendered object maps, and object-aware neural anchors | Best released baseline for replacing independent object models with shared geometry while retaining hard persistent-region ownership |
+| [Segment then Splat](https://github.com/luyr/Segment-then-Splat) | Posed RGB, object masks, and a point initializer with hard object IDs | One conventional static 3DGS whose fixed IDs are inherited by cloned and split Gaussians; RGB and sampled object-appearance losses train jointly | One static Gaussian scene with hard object ownership and independently loadable object subsets | Implemented hard-ownership baseline for testing whether designer IDs should remain immutable during reconstruction |
 | [Gaussian Grouping](https://arxiv.org/abs/2312.00732) | RGB and SAM/DEVA identity supervision | One 3DGS with a differentiably rendered identity feature and local 3D consistency | One editable, grouped Gaussian scene | Strong shared-scene baseline; region identity need not require separate training |
 | [vMAP](https://arxiv.org/abs/2302.01838) | RGB-D video, poses, and object masks | One compact implicit model per object, optimized in a vectorized map | Separate watertight object fields | Supports modular object models, although its online RGB-D setting differs from our posed-image dataset |
 | [Direct Object-Level Reconstruction via Probabilistic Gaussian Splatting](https://arxiv.org/abs/2603.14316) | Posed images and continuous foreground probabilities | Filters the SfM initializer and trains a compact single-object 2DGS with per-Gaussian foreground probability | One compact object-level 2DGS and probability masks | Closest mathematical reference for using Step 5 confidence as soft supervision rather than thresholding every candidate |

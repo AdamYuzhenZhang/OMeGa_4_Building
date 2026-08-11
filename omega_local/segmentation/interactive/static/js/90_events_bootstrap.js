@@ -476,7 +476,12 @@ if (rgbdCueDebugSelect) {
 }
 showPointCloudInput.addEventListener("change", () => {
   state.showPointCloud = showPointCloudInput.checked;
-  if (state.showPointCloud) deactivateGaussianViewport({ redraw: false });
+  if (state.showPointCloud) {
+    deactivateGaussianViewport({ redraw: false });
+    if (typeof deactivateMeshViewport === "function") {
+      deactivateMeshViewport({ redraw: false });
+    }
+  }
   render();
 });
 if (showColmapPointCloudInput) {

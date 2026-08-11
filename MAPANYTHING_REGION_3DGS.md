@@ -1,5 +1,7 @@
 # MapAnything Region 3DGS
 
+Joint static-scene hard/soft identity baselines that reuse this pipeline's split outputs are documented in [STATIC_SEMANTIC_3DGS.md](STATIC_SEMANTIC_3DGS.md).
+
 ## Purpose
 
 This is a custom reconstruction pipeline parallel to the released
@@ -11,9 +13,12 @@ stage.
 manual persistent-region masks + propagated masks
         -> MapAnything point ownership
         -> identity-cleaned per-frame masks
-        -> per-region MapAnything point initializers
-        -> independently trained region 3DGS
-        -> world-aligned composed scene
+        -> [A] per-region point initializers
+             -> independently trained region 3DGS
+             -> world-aligned composed scene
+        -> [B] one labeled shared initializer
+             -> jointly trained ObjectGS scene
+             -> scene RGB + persistent-region ownership
 ```
 
 The pipeline has its own code and output root:
@@ -25,6 +30,7 @@ omega_local/reconstruction/pipelines/mapanything_3dgs/
   01_input/
   02_split/
   03_splat/
+  04_shared_objectgs/runs/<objectgs-run-id>/
 ```
 
 It does not read or mutate a Split&Splat experiment run. The released
@@ -136,6 +142,94 @@ with the released masked instance trainer from
 [Split&Splat](https://arxiv.org/abs/2602.03809). Split&Splat remains a separate
 baseline because its Split stage trains and labels a global 3DGS, while this
 pipeline carries identity on MapAnything points.
+
+## Shared ObjectGS Stage
+
+The parallel shared-scene branch adapts the released
+[ObjectGS](https://ruijiezhu94.github.io/ObjectGS_page/) implementation. It
+keeps one Scaffold-GS-style scene instead of training and concatenating one
+model per region:
+
+```text
+MapAnything RGB points + persistent IDs
+        -> voxel anchors with fixed one-hot region IDs
+        -> shared RGB/geometry optimization
+        -> ID-preserving anchor growth and pruning
+        -> joint RGB scene + rendered persistent-region maps
+```
+
+ObjectGS renders region logits through the same alpha-composited visibility
+model as RGB. For a known target label `L(p)` and rendered categorical
+distribution `q(p)`, its semantic term is:
+
+```text
+L_sem = -sum_{p : L(p) != 0} log q_{L(p)}(p)
+L = L_rgb + lambda_dssim L_dssim + lambda_volume L_volume
+    + lambda_sem L_sem
+```
+
+Label `0` is unknown and ignored by the semantic cross-entropy, while those
+pixels still supervise shared RGB reconstruction. The adapter maps exact
+point-vote labels into ObjectGS anchors. Labels created only by MapAnything
+geometry completion are conservatively reset to unknown by default so local
+kNN completion is not promoted to hard semantic truth. Growth inherits the
+parent anchor region ID, and pruning removes anchors without changing surviving
+IDs.
+
+The faithful baseline uses the released 3D-scene defaults: 30,000 iterations,
+semantic weight `0.1`, 10 offsets per anchor, and voxel size `0.001`. It does
+not add custom manual-frame weighting inside ObjectGS; completed manual masks
+remain exact in the prepared indexed masks, and their stronger influence has
+already been used during the MapAnything Split association. This keeps the
+first shared-scene test attributable to the published method.
+
+Outputs live under:
+
+```text
+04_shared_objectgs/runs/<objectgs-run-id>/
+  01_dataset/   # posed RGB, indexed masks, labeled initializer
+  02_config/    # generated released-ObjectGS configuration
+  03_model/     # native neural-anchor model
+  04_outputs/   # rendered ID maps, overlays, and anchor debug points
+  05_meshes/    # bounded-TSDF, cleaned per-object PLY and GLB geometry
+```
+
+The native ObjectGS model is a neural-anchor representation rather than a
+standard explicit 3DGS PLY. In Step 1, `Shared ObjectGS` therefore exposes the
+official RGB render at each calibrated capture view, the predicted persistent
+region-ID maps, and region-colored final anchors with per-object visibility
+controls. ObjectGS's separate official geometry path filters the learned
+anchors by region, renders object-only RGB-D across the training cameras, and
+integrates each object with bounded TSDF. The editor exposes these meshes as
+independent parts with RGB/region-color modes. This is extracted geometry, not
+an exact conversion of the camera-dependent neural splats; a dedicated
+Scaffold-GS renderer is still required for free-camera neural RGB rendering.
+
+These three artifacts have different meanings:
+
+- `Final Neural RGB (Views)` is the final ObjectGS scene rendered by the native
+  neural-anchor decoder at a calibrated dataset camera.
+- `Rendered Region IDs` is produced by alpha-compositing the fixed anchor IDs
+  through that same geometry. It is an optimized model output supervised by,
+  but not copied from, the input propagated masks.
+- `Neural Anchor Scaffold` contains learned anchor centers and persistent IDs.
+  It starts from the labeled MapAnything initializer, then changes through
+  ObjectGS anchor growth and pruning. Each anchor generates up to ten explicit
+  Gaussians through shared color, opacity, and covariance MLPs.
+- `Official Object Meshes` contains one bounded-TSDF mesh per persistent ID.
+  Vertex colors come from the object-only ObjectGS renders; extraction does not
+  retrain the scene or change anchor identities. The metric dataset uses a
+  consistent `1 cm` TSDF voxel; RGB-D is integrated online to bound memory, and
+  a post-cleanup triangle cap keeps the geometry practical to inspect.
+
+The completed model is the anchor PLY together with `color_mlp.pt`,
+`opacity_mlp.pt`, and `cov_mlp.pt` under
+`03_model/<run>/point_cloud/iteration_30000/`. Object partitioning is exact in
+the native renderer: it filters the anchor `label_ids` before decoding. The
+released model uses `view_dim: 3`, however, so decoded color, opacity, scale,
+rotation, and offset selection depend on the camera. Baking those values into
+ordinary per-object 3DGS PLYs would be a reference-view approximation, not an
+exact conversion of the final ObjectGS model.
 
 ## Failure Analysis And Corrected Protocol
 

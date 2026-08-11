@@ -1185,11 +1185,12 @@ def _discover_split_splat_backends(work_root: Path) -> list[PropagationBackend]:
         except (OSError, json.JSONDecodeError):
             continue
         label_space = str(payload.get("labelSpace") or "")
-        if label_space not in {
+        supported_label_space = label_space in {
             "split_splat_instance",
             "frame_local_proposal",
             "persistent_region",
-        }:
+        } or label_space.startswith("segment_then_splat_")
+        if not supported_label_space:
             continue
         # Ordinary editor propagation also uses persistent-region IDs. Only
         # canonical staged Split experiments belong in this discovery path.
